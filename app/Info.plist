@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Sharp</string>
+	<key>CFBundleExecutable</key>
+	<string>Sharp</string>
+	<key>CFBundleIconFile</key>
+	<string>Sharp</string>
+	<key>CFBundleIdentifier</key>
+	<string>sh.sharp.app</string>
+	<key>CFBundleName</key>
+	<string>Sharp</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>12</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.15</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Sharp plays this Mac’s audio on your connected display Mac.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_sharp._tcp</string>
+	</array>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Sharp uses the local Ethernet link to find your paired Mac and send the display.</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+</dict>
+</plist>
