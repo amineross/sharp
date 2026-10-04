@@ -67,6 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       name: NSWorkspace.willSleepNotification, object: nil)
             notifications.addObserver(self, selector: #selector(systemDidWake),
                                       name: NSWorkspace.didWakeNotification, object: nil)
+            notifications.addObserver(self, selector: #selector(screensDidSleep),
+                                      name: NSWorkspace.screensDidSleepNotification, object: nil)
+            notifications.addObserver(self, selector: #selector(screensDidWake),
+                                      name: NSWorkspace.screensDidWakeNotification, object: nil)
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(screensDidWake),
+                                                                name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
             self.installStatusItem()
             SharpModel.shared.activate()
             if !SharpModel.shared.configured { self.showPermission() }
@@ -93,6 +99,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc private func systemDidWake() {
         SharpModel.shared.systemDidWake()
+    }
+
+    @MainActor @objc private func screensDidSleep() {
+        SharpModel.shared.screensDidSleep()
+    }
+
+    @MainActor @objc private func screensDidWake() {
+        SharpModel.shared.screensDidWake()
     }
 
     @MainActor private func installStatusItem() {

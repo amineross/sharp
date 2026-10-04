@@ -246,6 +246,8 @@
 
 - (void)handleCursorDatagram:(const shtp_header_t *)sh
                      payload:(const uint8_t *)payload {
+    /* Arrival time before taking the lock, which rendering may hold. */
+    uint64_t rxNs = shtp_now_ns();
     pthread_mutex_lock(&_stateLock);
     if (sh == NULL || payload == NULL ||
         sh->payload_len < sizeof(sharp_cursor_position_t)) {
@@ -278,8 +280,78 @@
     }
     _cursorVisible = (ntohl(cursor.flags) & 1u) != 0;
     _cursorPackets++;
-    _cursorLastRxNs = shtp_now_ns();
+    _cursorLastRxNs = rxNs;
+    [self recordCursorSample:sampleNs receivedNs:rxNs];
     pthread_mutex_unlock(&_stateLock);
+}
+
+/* Caller holds _stateLock. */
+- (void)recordCursorSample:(uint64_t)sampleNs receivedNs:(uint64_t)rxNs {
+    if (_cursorHistoryCount > 0 &&
+        sampleNs <= _cursorHistory[_cursorHistoryNewest].sample_ns) {
+        return;
+    }
+    /* The smallest arrival-minus-sample offset approximates the clock
+     * difference plus the fastest path. Let it rise by 1 ms per second so a
+     * slower route or clock drift is followed instead of held forever. */
+    int64_t offset = (int64_t)rxNs - (int64_t)sampleNs;
+    if (_cursorHistoryCount == 0 || _cursorClockUpdatedNs == 0u) {
+        _cursorClockOffsetNs = offset;
+    } else {
+        int64_t relaxed = _cursorClockOffsetNs +
+                          (int64_t)((rxNs - _cursorClockUpdatedNs) / 1000u);
+        _cursorClockOffsetNs = MIN(offset, relaxed);
+    }
+    _cursorClockUpdatedNs = rxNs;
+    _cursorHistoryNewest = _cursorHistoryCount == 0
+                               ? 0u
+                               : (_cursorHistoryNewest + 1u) % SHARP_CURSOR_HISTORY;
+    if (_cursorHistoryCount < SHARP_CURSOR_HISTORY) _cursorHistoryCount++;
+    sharp_cursor_sample_t *sample = &_cursorHistory[_cursorHistoryNewest];
+    sample->sample_ns = sampleNs;
+    sample->x = _cursorX;
+    sample->y = _cursorY;
+    sample->image_id = _cursorImageId;
+    sample->visible = _cursorVisible ? 1u : 0u;
+}
+
+/* Caller holds _stateLock. Fills position, shape and visibility for a frame
+ * drawn at nowNs, a short playout delay behind the newest sample. */
+- (void)interpolateCursorAt:(uint64_t)nowNs into:(sharp_cursor_snapshot_t *)cursor {
+    if (_cursorHistoryCount == 0) return;
+    if (_cursorPlayoutNs == 0u) {
+        const char *env = getenv("SHARP_CURSOR_PLAYOUT_MS");
+        double ms = env != NULL ? strtod(env, NULL) : 6.0;
+        _cursorPlayoutNs = (uint64_t)(MAX(0.5, MIN(50.0, ms)) * 1000000.0);
+    }
+    int64_t target = (int64_t)nowNs - _cursorClockOffsetNs - (int64_t)_cursorPlayoutNs;
+    const sharp_cursor_sample_t *newer = NULL;
+    const sharp_cursor_sample_t *older = NULL;
+    for (uint32_t i = 0; i < _cursorHistoryCount; i++) {
+        uint32_t index = (_cursorHistoryNewest + SHARP_CURSOR_HISTORY - i) % SHARP_CURSOR_HISTORY;
+        const sharp_cursor_sample_t *sample = &_cursorHistory[index];
+        if ((int64_t)sample->sample_ns <= target) { older = sample; break; }
+        newer = sample;
+    }
+    /* Before the oldest sample: show it. After the newest: hold it. */
+    const sharp_cursor_sample_t *shown = older != NULL ? older : newer;
+    double x = shown->x, y = shown->y;
+    if (older != NULL && newer != NULL) {
+        /* After a pause the previous sample can be far older than the move;
+         * glide only across the last sampling interval, not the whole pause. */
+        int64_t start = (int64_t)older->sample_ns;
+        int64_t end = (int64_t)newer->sample_ns;
+        if (end - start > 25000000) start = end - 8000000;
+        if (target > start && end > start) {
+            double t = (double)(target - start) / (double)(end - start);
+            x = older->x + (newer->x - older->x) * t;
+            y = older->y + (newer->y - older->y) * t;
+        }
+    }
+    cursor->x = (int32_t)llround(MAX(0.0, MIN((double)_config.width - 1.0, x)));
+    cursor->y = (int32_t)llround(MAX(0.0, MIN((double)_config.height - 1.0, y)));
+    cursor->image_id = shown->image_id;
+    cursor->visible = shown->visible;
 }
 
 - (uint16_t)sendMissingVsliceNacksForRegion:(uint16_t)regionId

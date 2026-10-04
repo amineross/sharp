@@ -1,5 +1,25 @@
 #import "Internal.h"
 
+/* Startup failures must reach the app as failures so it can save a report;
+ * -[NSApp terminate:] would exit with status 0. */
+static void sharp_receiver_startup_failed(void) {
+    fflush(stdout);
+    fflush(stderr);
+    exit(1);
+}
+
+/* Hide this Mac's own pointer while it is idle; Sharp draws the sender's. */
+static void sharp_hide_idle_local_cursor(void) {
+    __block NSPoint last = [NSEvent mouseLocation];
+    __block NSUInteger idleTicks = 0;
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
+        (void)timer;
+        NSPoint now = [NSEvent mouseLocation];
+        if (!NSEqualPoints(now, last)) { last = now; idleTicks = 0; return; }
+        if (++idleTicks >= 2 && NSApp.isActive) [NSCursor setHiddenUntilMouseMoves:YES];
+    }];
+}
+
 @implementation SharpDisplayApp
 @synthesize config = _config;
 @synthesize receiver = _receiver;
@@ -158,14 +178,14 @@
 
     if (sharp_tile_receiver_init(&_receiver, _config.width, _config.height) != 0) {
         fprintf(stderr, "receiver allocation failed\n");
-        [NSApp terminate:self];
+        sharp_receiver_startup_failed();
         return;
     }
     _motionMaskBytes = (_receiver.tile_count + 7u) / 8u;
     if (_motionMaskBytes > SHARP_MOTION_MASK_MAX_BYTES) {
         fprintf(stderr, "motion mask exceeds receiver limit\n");
         sharp_tile_receiver_destroy(&_receiver);
-        [NSApp terminate:self];
+        sharp_receiver_startup_failed();
         return;
     }
     _testCorruptTileId = -1;
@@ -184,7 +204,7 @@
     if (sharp_framebuf_init(&_frontFb, _config.width, _config.height) != 0) {
         fprintf(stderr, "front framebuffer allocation failed\n");
         sharp_tile_receiver_destroy(&_receiver);
-        [NSApp terminate:self];
+        sharp_receiver_startup_failed();
         return;
     }
     _videoReassembler =
@@ -193,7 +213,7 @@
         fprintf(stderr, "video reassembler allocation failed\n");
         sharp_framebuf_destroy(&_frontFb);
         sharp_tile_receiver_destroy(&_receiver);
-        [NSApp terminate:self];
+        sharp_receiver_startup_failed();
         return;
     }
 
@@ -201,7 +221,7 @@
     if (_fd < 0 || shtp_bind_ipv4(_fd, _config.bind_ip, (unsigned short)_config.port) != 0 ||
         shtp_make_nonblocking(_fd) != 0) {
         perror("socket/bind");
-        [NSApp terminate:self];
+        sharp_receiver_startup_failed();
         return;
     }
 
@@ -280,13 +300,14 @@
     }
 
     [self updateDrawableSize];
+    sharp_hide_idle_local_cursor();
 
     _renderQueue = dispatch_queue_create("sh.sharp.m1-display-recv.render",
                                          DISPATCH_QUEUE_SERIAL);
     if (_config.net_threads) {
         if ([self startNetworkThreads] != 0) {
             fprintf(stderr, "network thread startup failed\n");
-            [NSApp terminate:self];
+            sharp_receiver_startup_failed();
             return;
         }
     } else {
@@ -306,7 +327,7 @@
         CVDisplayLinkStart(_displayLink);
     } else {
         fprintf(stderr, "CVDisplayLink unavailable\n");
-        [NSApp terminate:self];
+        sharp_receiver_startup_failed();
         return;
     }
 

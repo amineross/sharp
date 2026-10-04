@@ -1,5 +1,6 @@
 #import "Internal.h"
 volatile sig_atomic_t g_sharp_stop_requested = 0;
+volatile sig_atomic_t g_sharp_capture_stopped = 0;
 void set_h264_709_color_attachments(CVPixelBufferRef pixelBuffer) {
     if (pixelBuffer == NULL) {
         return;
@@ -304,7 +305,7 @@ int parse_args(int argc, char **argv, screen_config_t *config) {
                 return -1;
             }
         } else if (strcmp(argv[i], "--pacing-mbps") == 0 && i + 1 < argc) {
-            if (shtp_parse_double(argv[++i], 0.0, 1000.0, &config->pacing_mbps) != 0) {
+            if (shtp_parse_double(argv[++i], 0.0, 4000.0, &config->pacing_mbps) != 0) {
                 return -1;
             }
         } else if (strcmp(argv[i], "--frame-log") == 0 && i + 1 < argc) {

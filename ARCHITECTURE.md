@@ -1,6 +1,6 @@
 # Working on Sharp
 
-The app owns connection and process lifetime. It keeps its Ethernet control connection and heartbeat alive when you pause sharing. Pausing stops the screen and audio engines. Disconnecting clears the live peer state; a remembered device alone does not mean a cable connection exists.
+The app owns connection and process lifetime. It keeps its control connection (Ethernet or Thunderbolt Bridge) and heartbeat alive when you pause sharing, and holds an App Nap exemption while connected so heartbeats stay on time. Pausing stops the screen and audio engines. Disconnecting clears the live peer state; a remembered device alone does not mean a cable connection exists.
 Sleep stops both engines and blocks new sessions until wake. The awake peer also stops its engine when it receives a sleep notice or loses the control connection. Sharp keeps the sharing preference, then reconnects after wake.
 
 `app/Diagnostics.swift` creates a single report with compatibility checks, link details, recent control events, engine output, and available log and crash excerpts. The control trace stays in memory when continuous logging is off.

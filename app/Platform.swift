@@ -9,16 +9,99 @@ import SystemConfiguration
 import VideoToolbox
 
 
-func wiredIPv4Address(for path: NWPath?) -> String? {
-    guard let path, path.usesInterfaceType(.wiredEthernet) else { return nil }
-    if case .hostPort(let host, _) = path.localEndpoint {
-        let address = String(describing: host)
-        if address.contains(".") && !address.contains(":") { return address }
-        if let scope = address.split(separator: "%", maxSplits: 1).dropFirst().first,
-           let ipv4 = ipv4Address(interfaceName: String(scope)) { return ipv4 }
+enum SharpLinkKind: String {
+    case ethernet = "Ethernet"
+    case thunderbolt = "Thunderbolt"
+}
+
+/// A cable Sharp may stream over: a wired Ethernet adapter or Thunderbolt Bridge.
+struct SharpDirectInterface: Equatable {
+    let name: String
+    let displayName: String
+    let kind: SharpLinkKind
+}
+
+/// Thunderbolt networking appears as a bridge (bridge0) whose members are the
+/// Thunderbolt ports. Those member ports report as Ethernet but never carry an
+/// address, so they drop out once an IPv4 address is required.
+func directInterfaces() -> [SharpDirectInterface] {
+    (SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] ?? []).compactMap { interface -> SharpDirectInterface? in
+        guard let name = SCNetworkInterfaceGetBSDName(interface) as String?,
+              let type = SCNetworkInterfaceGetInterfaceType(interface) as String? else { return nil }
+        let displayName = SCNetworkInterfaceGetLocalizedDisplayName(interface) as String? ?? name
+        // kSCNetworkInterfaceTypeBridge is not in the public SDK. Every
+        // localization of "Thunderbolt Bridge" keeps the brand name.
+        if type == "Bridge" {
+            return SharpDirectInterface(name: name, displayName: displayName,
+                                        kind: displayName.contains("Thunderbolt") ? .thunderbolt : .ethernet)
+        }
+        // iPhone and iPad tethering also report as Ethernet.
+        guard type == kSCNetworkInterfaceTypeEthernet as String,
+              !displayName.hasPrefix("iPhone"), !displayName.hasPrefix("iPad") else { return nil }
+        return SharpDirectInterface(name: name, displayName: displayName, kind: .ethernet)
+    }.sorted { $0.name < $1.name }
+}
+
+func directInterface(named name: String?) -> SharpDirectInterface? {
+    guard let name else { return nil }
+    return directInterfaces().first { $0.name == name }
+}
+
+/// Direct interfaces with an IPv4 address, Thunderbolt first.
+func activeDirectInterfaces() -> [(interface: SharpDirectInterface, address: String)] {
+    directInterfaces().compactMap { interface in ipv4Address(interfaceName: interface.name).map { (interface, $0) } }
+        .sorted { ($0.interface.kind == .thunderbolt ? 0 : 1, $0.interface.name) < ($1.interface.kind == .thunderbolt ? 0 : 1, $1.interface.name) }
+}
+
+func activeDirectSummary() -> [String] {
+    activeDirectInterfaces().map { "\($0.interface.name) \($0.interface.displayName) (\($0.address))" }
+}
+
+/// This Mac's IPv4 address on the path, if the path runs over a direct interface.
+func directIPv4Address(for path: NWPath?) -> String? {
+    guard let path else { return nil }
+    let direct = Set(directInterfaces().map(\.name))
+    if case .hostPort(let host, _)? = path.localEndpoint {
+        let parts = String(describing: host).split(separator: "%", maxSplits: 1).map(String.init)
+        if let address = parts.first, address.contains("."), !address.contains(":") {
+            if let name = interfaceName(forIPv4: address), direct.contains(name) { return address }
+        } else if parts.count == 2, direct.contains(parts[1]), let ipv4 = ipv4Address(interfaceName: parts[1]) {
+            return ipv4
+        }
     }
-    guard let interface = path.availableInterfaces.first(where: { $0.type == .wiredEthernet }) else { return nil }
+    guard let interface = path.availableInterfaces.first(where: { direct.contains($0.name) }) else { return nil }
     return ipv4Address(interfaceName: interface.name)
+}
+
+/// Negotiated link speed in bits per second; nil when the driver does not report one.
+func linkSpeed(interfaceName: String) -> UInt64? {
+    var pointer: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&pointer) == 0, let first = pointer else { return nil }
+    defer { freeifaddrs(pointer) }
+    for item in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        guard String(cString: item.pointee.ifa_name) == interfaceName,
+              item.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_LINK),
+              let data = item.pointee.ifa_data else { continue }
+        let speed = UInt64(data.assumingMemoryBound(to: if_data.self).pointee.ifi_baudrate)
+        return speed > 0 ? speed : nil
+    }
+    return nil
+}
+
+func interfaceName(forIPv4 address: String) -> String? {
+    var pointer: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&pointer) == 0, let first = pointer else { return nil }
+    defer { freeifaddrs(pointer) }
+    for item in sequence(first: first, next: { $0.pointee.ifa_next }) {
+        guard item.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_INET) else { continue }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        if getnameinfo(item.pointee.ifa_addr, socklen_t(item.pointee.ifa_addr.pointee.sa_len),
+                       &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0,
+           String(cString: host) == address {
+            return String(cString: item.pointee.ifa_name)
+        }
+    }
+    return nil
 }
 
 func sharpPairingCode(_ first: String, _ second: String) -> String {
@@ -44,17 +127,6 @@ func h264HardwareEncoderAvailable(width: Int, height: Int) -> Bool {
                                              compressionSessionOut: &session)
     if let session { VTCompressionSessionInvalidate(session) }
     return status == noErr
-}
-
-func wiredInterfaceNames() -> [String] {
-    (SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] ?? []).compactMap { interface -> String? in
-        guard SCNetworkInterfaceGetInterfaceType(interface) as String? == kSCNetworkInterfaceTypeEthernet as String else { return nil }
-        return SCNetworkInterfaceGetBSDName(interface) as String?
-    }.sorted()
-}
-
-func activeWiredInterfaces() -> [String] {
-    wiredInterfaceNames().compactMap { name in ipv4Address(interfaceName: name).map { "\(name) (\($0))" } }
 }
 
 func receiverDisplaySize() -> SharpDisplaySize {

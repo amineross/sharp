@@ -13,9 +13,8 @@ extension SharpModel {
     func startReceiverService() {
         guard !localSleeping else { return }
         do {
-            let parameters = NWParameters.tcp
-            parameters.requiredInterfaceType = .wiredEthernet
-            let listener = try NWListener(using: parameters, on: controlPort)
+            // Bonjour carries the port, so when another app holds 49171 any free port works.
+            let listener = try NWListener(using: directParameters, on: controlPortInUse ? .any : controlPort)
             self.listener = listener
             listener.service = NWListener.Service(name: peerID, type: serviceType)
             listener.serviceRegistrationUpdateHandler = { change in
@@ -32,9 +31,20 @@ extension SharpModel {
                     case .ready:
                         if self.control == nil, !self.localSleeping {
                             self.linkState = self.peerReportedSleep ? .sleeping : .waiting
-                            self.status = "Connect an Ethernet cable"
+                            self.status = "Connect an Ethernet or Thunderbolt cable"
                         }
-                    case .waiting(let error): self.status = "Discovery is waiting. \(error.localizedDescription)"
+                    case .waiting(let error):
+                        if self.isLocalNetworkDenied(error) {
+                            self.localNetworkDenied = true
+                            self.status = "Allow Local Network access for Sharp in System Settings"
+                        } else {
+                            self.status = "Discovery is waiting. \(error.localizedDescription)"
+                        }
+                    case .failed(.posix(.EADDRINUSE)) where !self.controlPortInUse:
+                        self.trace("control port \(self.controlPort) in use; listening on another port")
+                        self.controlPortInUse = true
+                        listener.cancel(); self.listener = nil
+                        self.startReceiverService()
                     case .failed(let error):
                         self.linkState = .waiting
                         self.status = "Discovery failed. \(error.localizedDescription)"
@@ -61,9 +71,9 @@ extension SharpModel {
                 guard self.pendingConnection === connection else { return }
                 if case .ready = state {
                     if let problem = self.directPathProblem(connection.currentPath) {
-                        self.status = problem
+                        self.trace("rejected connection: \(problem) path=\(String(describing: connection.currentPath))")
                         self.pendingConnection = nil
-                        connection.cancel()
+                        self.reject(connection, wifi: connection.currentPath?.usesInterfaceType(.wifi) == true)
                         return
                     }
                     self.pendingConnection = nil
@@ -82,9 +92,24 @@ extension SharpModel {
         }
     }
 
+    /// Tell the sender why before closing, so it can explain instead of retrying blindly.
+    func reject(_ connection: NWConnection, wifi: Bool) {
+        let name = Host.current().localizedName ?? "The display Mac"
+        let reason = wifi ? "\(name) is reachable only over Wi-Fi. Connect the Macs with Ethernet or Thunderbolt."
+                          : "\(name) can’t use this network link. Connect the Macs with Ethernet or Thunderbolt."
+        guard var data = try? JSONEncoder().encode(ControlMessage(command: "rejected", peerID: peerID, peerName: name, reason: reason)) else {
+            connection.cancel(); return
+        }
+        data.append(0x0a)
+        connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
     func attachReceiverControl(_ connection: NWConnection) {
         guard !localSleeping else { connection.cancel(); return }
         control?.cancel()
+        reconnectFailures = 0
+        peerDisplayAsleep = false
+        disconnectStatus = nil
         peerReportedSleep = false
         linkState = .connected
         status = "Sharp device connected"
@@ -94,16 +119,17 @@ extension SharpModel {
             self?.lastControlMessage = Date()
             self?.handleReceiverMessage(text)
         } }
-        line.onClosed = { [weak self, weak line] in
+        line.onClosed = { [weak self, weak line] reason in
             Task { @MainActor in
                 guard let self, self.control === line else { return }
+                self.trace("disconnected: \(reason)")
                 self.heartbeatWork?.cancel(); self.heartbeatWork = nil
                 self.control = nil
                 self.stopReceiver()
                 self.linkState = self.localSleeping || self.peerReportedSleep ? .sleeping : .waiting
                 self.status = self.peerReportedSleep
                     ? "\(self.peerName.isEmpty ? "The sender" : self.peerName) is asleep"
-                    : "Waiting for a Sharp connection"
+                    : self.disconnectStatus ?? "Waiting for a Sharp connection"
             }
         }
         line.start()
@@ -127,6 +153,8 @@ extension SharpModel {
         }
         if message.command == "benchmark-stop" { benchmarkPeerScene = nil; return }
         trace("received \(message.command) from \(message.peerName)")
+        if message.command == "display-sleep" { peerDisplayAsleep = true; return }
+        if message.command == "display-wake" { peerDisplayAsleep = false; wakeDisplay(); return }
         if peerReportedSleep && message.command != "sleeping" { return }
         if message.command == "hello" || message.command == "resume" {
             peerName = message.peerName
@@ -160,8 +188,8 @@ extension SharpModel {
         if let mode = message.mode.flatMap(SharpMode.init(rawValue:)) { displayMode = mode }
         if let scale = message.cursorScale { cursorScale = min(2.0, max(0.6, scale)) }
         if let hue = message.cursorHue, hue.isFinite { cursorHue = min(1, max(0, hue)) }
-        let localIP = wiredIPv4Address(for: control?.connection.currentPath)
-        guard let localIP else { control?.send(ControlMessage(command: "error", peerID: peerID, peerName: "Sharp", reason: "No direct Ethernet address")); return }
+        let localIP = directIPv4Address(for: control?.connection.currentPath)
+        guard let localIP else { control?.send(ControlMessage(command: "error", peerID: peerID, peerName: "Sharp", reason: "The display Mac has no address on this cable")); return }
         rememberPeer(message.peerID)
         beginReceiverSession(message, localIP: localIP)
     }
@@ -183,9 +211,7 @@ extension SharpModel {
 
     func startBrowser() {
         guard !localSleeping else { return }
-        let parameters = NWParameters.tcp
-        parameters.requiredInterfaceType = .wiredEthernet
-        let browser = NWBrowser(for: .bonjour(type: serviceType, domain: nil), using: parameters)
+        let browser = NWBrowser(for: .bonjour(type: serviceType, domain: nil), using: directParameters)
         self.browser = browser
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             Task { @MainActor in
@@ -198,6 +224,7 @@ extension SharpModel {
             Task { @MainActor in
                 guard let self else { return }
                 self.trace("browser \(state)")
+                self.noteDiscoveryState(state)
                 if case .failed(let error) = state {
                     self.status = "Discovery failed. \(error.localizedDescription)"
                     self.writeReport(kind: "discovery", lines: ["\(error)"])
@@ -206,7 +233,7 @@ extension SharpModel {
         }
         browser.start(queue: queue)
         linkState = peerReportedSleep ? .sleeping : .waiting
-        status = "Waiting for a Sharp connection"
+        status = disconnectStatus ?? "Waiting for a Sharp connection"
         /*
          * A receiver and sender commonly launch at the same instant after
          * login. Network.framework can publish the current Bonjour result
@@ -227,15 +254,26 @@ extension SharpModel {
 
     func consider(_ results: Set<NWBrowser.Result>) {
         guard !localSleeping, control == nil, pendingConnection == nil, senderProcess?.isRunning != true else { return }
+        let direct = Dictionary(directInterfaces().map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        rejectedInterfaces = rejectedInterfaces.filter { $0.value.timeIntervalSinceNow > -60 }
         let candidates = results.filter { result in
             guard case .service(let name, _, _, let interface) = result.endpoint else { return false }
-            if let interface, interface.type != .wiredEthernet { return false }
+            if let interface, direct[interface.name] == nil { return false }
             if let interface, !preferredInterface.isEmpty && interface.name != preferredInterface { return false }
+            if let interface, rejectedInterfaces[interface.name] != nil { return false }
             return rememberedPeerID == nil || rememberedPeerID == name
-        }
-        trace("wired candidates=\(candidates.count) remembered=\(rememberedPeerID ?? "none")")
+        }.sorted { rank($0, direct) < rank($1, direct) }
+        trace("direct candidates=\(candidates.count) remembered=\(rememberedPeerID ?? "none")")
         guard let result = candidates.first else { return }
         connect(result.endpoint)
+    }
+
+    /// Thunderbolt first, then cables with self-assigned addresses (a direct
+    /// link), then wired networks shared with other devices.
+    private func rank(_ result: NWBrowser.Result, _ direct: [String: SharpDirectInterface]) -> Int {
+        guard case .service(_, _, _, let interface?) = result.endpoint, let link = direct[interface.name] else { return 3 }
+        if link.kind == .thunderbolt { return 0 }
+        return ipv4Address(interfaceName: link.name)?.hasPrefix("169.254.") == true ? 1 : 2
     }
 
     func connect(_ endpoint: NWEndpoint) {
@@ -243,7 +281,15 @@ extension SharpModel {
         // Monterey can stall forever when a Bonjour service endpoint is combined
         // with requiredInterfaceType. The browser is Ethernet-only, and the ready
         // path is verified below before Sharp attaches its control channel.
-        let connection = NWConnection(to: endpoint, using: .tcp)
+        // Keep Wi-Fi out of the race: macOS otherwise tries it first and the
+        // attempt stalls until our timeout.
+        var parameters = NWParameters.tcp
+        if #available(macOS 13.0, *) { parameters = directParameters }
+        // The stream runs over IPv4, so the control link must too. Over IPv6
+        // link-local, macOS can pick an interface with no IPv4 address, such
+        // as a bridge member.
+        (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
+        let connection = NWConnection(to: endpoint, using: parameters)
         pendingConnection?.cancel()
         pendingConnection = connection
         connection.stateUpdateHandler = { [weak self] state in
@@ -254,6 +300,7 @@ extension SharpModel {
                 switch state {
                 case .ready:
                     if let problem = self.directPathProblem(connection.currentPath) {
+                        self.trace("connection unusable: \(problem)")
                         self.pendingConnection = nil
                         connection.cancel()
                         self.status = problem
@@ -275,6 +322,7 @@ extension SharpModel {
         connection.start(queue: queue)
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak connection] in
             guard let self, let connection, self.pendingConnection === connection else { return }
+            self.trace("connection timed out")
             self.pendingConnection = nil
             connection.cancel()
             self.scheduleReconnect()
@@ -292,10 +340,10 @@ extension SharpModel {
             self?.lastControlMessage = Date()
             self?.handleSenderMessage(text)
         } }
-        line.onClosed = { [weak self, weak line] in
+        line.onClosed = { [weak self, weak line] reason in
             Task { @MainActor in
                 guard let self, self.control === line else { return }
-                self.handleDisconnect()
+                self.handleDisconnect(reason: reason)
             }
         }
         line.start()
@@ -353,6 +401,8 @@ extension SharpModel {
         }
         if message.command == "display", let width = message.width,
            let height = message.height, width >= 640, height >= 360 {
+            reconnectFailures = 0
+            disconnectStatus = nil
             rememberProfile(message.peerID, name: message.peerName,
                             display: SharpDisplaySize(width: width, height: height))
             peerSharingEnabled = message.sharingEnabled ?? true
@@ -374,7 +424,7 @@ extension SharpModel {
         }
         if sharingEnabled, peerSharingEnabled, !peerReportedSleep,
            message.command == "ready", let receiverIP = message.receiverIP,
-           let sourceIP = wiredIPv4Address(for: control?.connection.currentPath) {
+           let sourceIP = directIPv4Address(for: control?.connection.currentPath) {
             if rememberedPeerID == nil { rememberPeer(message.peerID) }
             if rememberedPeerID == message.peerID {
                 peerName = message.peerName
@@ -389,12 +439,18 @@ extension SharpModel {
             stopSender()
             sendStartRequest()
         } else if message.command == "rejected" || message.command == "error" {
-            status = message.reason ?? "Connection rejected"
+            if message.command == "rejected",
+               let name = interfaceName(forIPv4: directIPv4Address(for: control?.connection.currentPath) ?? "") {
+                rejectedInterfaces[name] = Date()
+            }
+            disconnectStatus = message.reason ?? "Connection rejected"
+            status = disconnectStatus ?? status
             control?.cancel()
         }
     }
 
-    func handleDisconnect() {
+    func handleDisconnect(reason: String = "closed") {
+        trace("disconnected: \(reason)")
         heartbeatWork?.cancel(); heartbeatWork = nil
         control = nil
         peerDisplaySize = nil
@@ -403,7 +459,7 @@ extension SharpModel {
         if configured {
             status = peerReportedSleep
                 ? "\(peerName.isEmpty ? "The display Mac" : peerName) is asleep"
-                : "Waiting for a Sharp connection"
+                : disconnectStatus ?? "Waiting for a Sharp connection"
             if !localSleeping { scheduleReconnect() }
         }
     }

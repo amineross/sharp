@@ -11,6 +11,8 @@ struct AppStateCheck {
         let fiveK = SharpDisplaySize(width: 5120, height: 2880)
         assert(SharpResolution.testedDefault(for: fiveK) == .balanced)
         assert(SharpResolution.native.isExperimental(for: fiveK))
+        assert(!SharpResolution.native.isSupported(for: fiveK), "5K streams exceed hardware H.264")
+        assert(SharpResolution.high.isSupported(for: fiveK) && SharpResolution.high.size(for: fiveK) == (3840, 2160))
         assert(SharpResolution.balanced.size(for: fiveK) == (2560, 1440))
         assert(!SharpResolution.native.isSupported(for: SharpDisplaySize(width: 6016, height: 3384)))
         let wide = SharpDisplaySize(width: 3840, height: 1600)
@@ -21,12 +23,15 @@ struct AppStateCheck {
         profileModel.rememberProfile("5k", name: "5K iMac", display: wide)
         assert(profileModel.resolution == .balanced, "Automatic defaults follow changed panel geometry")
         profileModel.rememberProfile("5k", name: "5K iMac", display: fiveK)
-        profileModel.chooseResolution(.native)
+        profileModel.chooseResolution(.high)
         profileModel.rememberProfile("wide", name: "Wide Mac", display: wide)
         assert(profileModel.resolution == .balanced)
         profileModel.selectProfile("5k")
-        assert(profileModel.resolution == .native, "An opted-in experimental choice survives reconnecting")
-        assert(SharpModel(defaults: profileDefaults).resolution == .native)
+        assert(profileModel.resolution == .high, "An opted-in experimental choice survives reconnecting")
+        assert(SharpModel(defaults: profileDefaults).resolution == .high)
+        profileModel.chooseResolution(.native)
+        profileModel.rememberProfile("5k", name: "5K iMac", display: fiveK)
+        assert(profileModel.resolution == .balanced, "A saved 5K stream from Beta 1 falls back to a working size")
 
         let suite = "sh.sharp.test.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -61,6 +66,17 @@ struct AppStateCheck {
         model.cursorScale = 1.3; model.cursorHue = 0.4
         model.cursorChanged()
         assert(model.control === control, "Cursor edits must retain the session")
+        model.chooseDisplayMode(model.displayMode == .mirror ? .extend : .mirror)
+        assert(model.control === control, "Mirror/Extend restarts the stream, not the connection")
+        assert(model.sessionActivity != nil, "A connection holds an App Nap exemption")
+        let retiring = Process()
+        retiring.executableURL = URL(fileURLWithPath: "/bin/sleep"); retiring.arguments = ["0.4"]
+        try? retiring.run()
+        var launchedAfterExit: Bool?
+        model.whenExited(retiring) { launchedAfterExit = !retiring.isRunning }
+        let deadline = Date().addingTimeInterval(5)
+        while launchedAfterExit == nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        assert(launchedAfterExit == true, "A new helper starts only after the old one exits")
         assert(defaults.double(forKey: "cursorHue") == 0.4)
         assert(model.handleCursorStyle(ControlMessage(command: "cursor-style", peerID: "test", peerName: "", cursorScale: 1.7, cursorHue: 0.2)))
         assert(model.cursorScale == 1.7 && model.cursorHue == 0.2)
@@ -87,7 +103,8 @@ struct AppStateCheck {
         assert(model.connectionTitle == "Paused", "A sleeping peer must stay paused after its connection drops")
         let report = model.diagnosticsText()
         assert(report.contains("Connection: Paused — Display Mac"))
-        assert(report.contains("Sender output") && report.contains("Receiver output") && report.contains("Ethernet"))
+        assert(report.contains("Sender output") && report.contains("Receiver output") && report.contains("Direct links"))
+        assert(model.sessionActivity == nil, "No App Nap exemption without a connection")
         print("App state PASS: audio preference, sleep state, peer identity and diagnostics")
     }
 }

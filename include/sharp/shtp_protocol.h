@@ -99,7 +99,10 @@ typedef enum sharp_cursor_image_id {
     SHARP_CURSOR_IMAGE_RESIZE_VERTICAL = 7,
     SHARP_CURSOR_IMAGE_UNAVAILABLE = 8,
     SHARP_CURSOR_IMAGE_ALTERNATE = 9,
-    SHARP_CURSOR_IMAGE_MAX = 10
+    /* Window-corner resize. Older receivers draw the arrow for unknown IDs. */
+    SHARP_CURSOR_IMAGE_RESIZE_DIAGONAL_NWSE = 10,
+    SHARP_CURSOR_IMAGE_RESIZE_DIAGONAL_NESW = 11,
+    SHARP_CURSOR_IMAGE_MAX = 12
 } sharp_cursor_image_id_t;
 
 _Static_assert(sizeof(sharp_cursor_position_t) == 40,

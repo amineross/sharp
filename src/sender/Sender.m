@@ -121,6 +121,7 @@ int main(int argc, char **argv) {
         NSUInteger lastDiscoveredWidth = 0u;
         NSUInteger lastDiscoveredHeight = 0u;
         unsigned int discoveryAttempts = requestedDisplayID != 0u ? 100u : 1u;
+        BOOL modeSelected = NO;
         for (unsigned int attempt = 0; attempt < discoveryAttempts; attempt++) {
             shareable = sharp_copy_shareable_content(&shareableError);
             if (shareable != nil) {
@@ -134,6 +135,18 @@ int main(int argc, char **argv) {
                         break;
                     }
                     display = nil;
+                    if (!modeSelected && attempt >= 3u) {
+                        modeSelected = YES;
+                        fprintf(stdout,
+                                "m1-screen-vdisplay-mode-select display_id=%u "
+                                "from=%lux%lu to=%ux%u selected=%d\n",
+                                requestedDisplayID, (unsigned long)lastDiscoveredWidth,
+                                (unsigned long)lastDiscoveredHeight, config.width,
+                                config.height,
+                                sharp_select_display_mode(requestedDisplayID,
+                                                          config.width, config.height));
+                        fflush(stdout);
+                    }
                 }
             }
             if (attempt + 1u < discoveryAttempts) {
@@ -349,46 +362,55 @@ int main(int argc, char **argv) {
         }
 
         dispatch_source_t cursorTimer = nil;
-        __block id cursorEventMonitor = nil;
-        __block uint64_t cursorEventCallbacks = 0u;
         if (cursorOverlayEnabled) {
-            NSRect screenFrame = sharp_appkit_frame_for_display(display.displayID);
+            size_t cursorShapes = sharp_cursor_shapes_prepare();
+            CGDirectDisplayID cursorDisplayID = display.displayID;
+            /* Interactive QoS keeps the 240 Hz rhythm steady under encode load. */
             dispatch_queue_t cursorQueue = dispatch_queue_create(
-                "sh.sharp.m1-screen-send.cursor", DISPATCH_QUEUE_SERIAL);
+                "sh.sharp.m1-screen-send.cursor",
+                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
+                                                        QOS_CLASS_USER_INTERACTIVE, 0));
             __block uint32_t cursorSeq = 1u;
             __block int32_t lastCursorX = INT32_MIN;
             __block int32_t lastCursorY = INT32_MIN;
             __block uint32_t lastCursorImage = 0u;
             __block BOOL lastCursorVisible = NO;
             __block uint64_t lastCursorSendNs = 0u;
-            __block uint64_t lastCursorSampleNs = 0u;
-            __block uint64_t lastCursorEventNs = 0u;
-            __block BOOL cursorEventSeen = NO;
-            void (^sampleCursor)(void) = ^{
+            __block uint64_t lastShapeNs = 0u;
+            __block uint32_t imageId = SHARP_CURSOR_IMAGE_ARROW;
+            cursorTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                 cursorQueue);
+            dispatch_source_set_timer(cursorTimer, dispatch_time(DISPATCH_TIME_NOW, 0),
+                                      4166667ull, 100000ull);
+            dispatch_source_set_event_handler(cursorTimer, ^{
+              uint64_t nowNs = shtp_now_ns();
+              /* The shape lookup costs ~0.2 ms; 30 Hz is quick enough for a
+               * pointer turning into a text cursor. */
+              if (lastShapeNs == 0u || nowNs - lastShapeNs >= 33000000ULL) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                  imageId = sharp_cursor_image_id(NSCursor.currentSystemCursor);
+#pragma clang diagnostic pop
+                  lastShapeNs = nowNs;
+              }
+              /* Global CoreGraphics coordinates, read fresh each sample so a
+               * rearranged display does not offset the cursor. */
+              CGRect bounds = CGDisplayBounds(cursorDisplayID);
+              CGEventRef event = CGEventCreate(NULL);
+              if (event == NULL || bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
+                  if (event != NULL) CFRelease(event);
+                  return;
+              }
+              CGPoint loc = CGEventGetLocation(event);
+              CFRelease(event);
               uint64_t sampleNs = shtp_now_ns();
-              if (lastCursorSampleNs != 0u &&
-                  sampleNs - lastCursorSampleNs < 4000000ULL) {
-                  return;
-              }
-              lastCursorSampleNs = sampleNs;
-              if (screenFrame.size.width <= 0.0 || screenFrame.size.height <= 0.0) {
-                  return;
-              }
-              NSPoint loc = [NSEvent mouseLocation];
-              CGFloat sx = (loc.x - screenFrame.origin.x) / screenFrame.size.width;
-              CGFloat sy = (screenFrame.origin.y + screenFrame.size.height - loc.y) /
-                           screenFrame.size.height;
-              BOOL visible = sx >= 0.0 && sx <= 1.0 && sy >= 0.0 && sy <= 1.0;
+              CGFloat sx = (loc.x - bounds.origin.x) / bounds.size.width;
+              CGFloat sy = (loc.y - bounds.origin.y) / bounds.size.height;
+              BOOL visible = sx >= 0.0 && sx < 1.0 && sy >= 0.0 && sy < 1.0;
               int32_t x = (int32_t)llround(MAX(0.0, MIN(1.0, sx)) *
                                            (CGFloat)MAX(1u, config.width - 1u));
               int32_t y = (int32_t)llround(MAX(0.0, MIN(1.0, sy)) *
                                            (CGFloat)MAX(1u, config.height - 1u));
-              NSCursor *systemCursor = nil;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-              systemCursor = NSCursor.currentSystemCursor;
-
-              uint32_t imageId = sharp_cursor_image_id(systemCursor);
               BOOL changed = x != lastCursorX || y != lastCursorY ||
                              imageId != lastCursorImage ||
                              visible != lastCursorVisible;
@@ -407,41 +429,11 @@ int main(int argc, char **argv) {
               lastCursorImage = imageId;
               lastCursorVisible = visible;
               lastCursorSendNs = sampleNs;
-            };
-            NSEventMask cursorEventMask = NSEventMaskMouseMoved |
-                                          NSEventMaskLeftMouseDragged |
-                                          NSEventMaskRightMouseDragged |
-                                          NSEventMaskOtherMouseDragged;
-            cursorEventMonitor = [NSEvent
-                addGlobalMonitorForEventsMatchingMask:cursorEventMask
-                                           handler:^(NSEvent *event) {
-              (void)event;
-              dispatch_async(cursorQueue, ^{
-                cursorEventSeen = YES;
-                cursorEventCallbacks++;
-                lastCursorEventNs = shtp_now_ns();
-                sampleCursor();
-              });
-            }];
-            cursorTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                                 cursorQueue);
-            dispatch_source_set_timer(cursorTimer, dispatch_time(DISPATCH_TIME_NOW, 0),
-                                      4166667ull, 250000ull);
-            dispatch_source_set_event_handler(cursorTimer, ^{
-              uint64_t nowNs = shtp_now_ns();
-              BOOL recentEvent = cursorEventSeen && nowNs >= lastCursorEventNs &&
-                                 nowNs - lastCursorEventNs < 250000000ULL;
-              BOOL heartbeatDue = lastCursorSendNs == 0u ||
-                                  nowNs - lastCursorSendNs >= 100000000ULL;
-              if (!recentEvent || heartbeatDue) {
-                  sampleCursor();
-              }
             });
             dispatch_resume(cursorTimer);
             fprintf(stdout,
-                    "m1-screen-cursor sample_hz=240 event_monitor=%u "
-                    "heartbeat_hz=10 fallback_poll=1\n",
-                    cursorEventMonitor != nil ? 1u : 0u);
+                    "m1-screen-cursor sample_hz=240 shape_hz=30 shapes=%zu heartbeat_hz=10\n",
+                    cursorShapes);
         }
 
         uint64_t runStartNs = shtp_now_ns();
@@ -525,14 +517,6 @@ int main(int argc, char **argv) {
         if (cursorTimer != nil) {
             dispatch_source_cancel(cursorTimer);
             cursorTimer = nil;
-        }
-        if (cursorEventMonitor != nil) {
-            [NSEvent removeMonitor:cursorEventMonitor];
-            cursorEventMonitor = nil;
-        }
-        if (cursorOverlayEnabled) {
-            fprintf(stdout, "m1-screen-cursor-summary event_callbacks=%" PRIu64
-                            "\n", cursorEventCallbacks);
         }
 
         dispatch_semaphore_t stopSem = dispatch_semaphore_create(0);
@@ -1036,5 +1020,5 @@ int main(int argc, char **argv) {
     }
 
     close(fd);
-    return 0;
+    return g_sharp_capture_stopped ? SHARP_EXIT_CAPTURE_STOPPED : 0;
 }

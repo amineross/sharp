@@ -136,7 +136,7 @@ struct SharpRoleCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(role == .sender ? "Send this Mac" : "Use as a display")
                         .font(.system(size: 16, weight: .medium))
-                    Text(role == .sender ? "Share this desktop over Ethernet" : "Show the desktop from another Mac")
+                    Text(role == .sender ? "Share this desktop over a cable" : "Show the desktop from another Mac")
                         .font(.system(size: 12)).foregroundColor(selected ? SharpColor.bg.opacity(0.72) : SharpColor.dim)
                 }
                 Spacer()
@@ -194,13 +194,19 @@ struct PermissionView: View {
                     }
                 }
             }
+            if #available(macOS 15.0, *) {
+                permission(model.localNetworkDenied ? "Local Network · Allow in System Settings" : "Local Network",
+                           symbol: "network", granted: model.localNetworkRequested && !model.localNetworkDenied) {
+                    if model.localNetworkDenied { model.openLocalNetworkSettings() } else { model.requestLocalNetworkAccess() }
+                }
+            }
             Button("Done") { model.saveAndStart(); dismiss() }
                 .buttonStyle(SharpButtonStyle(filled: true)).disabled(model.needsScreenPermission)
                 .opacity(model.needsScreenPermission ? 0.45 : 1)
         }
         .padding(24).frame(width: 580)
         .background(SharpColor.bg).foregroundColor(SharpColor.fg)
-        .onAppear { model.runProbes() }
+        .onAppear { model.runProbes(); model.requestLocalNetworkAccess() }
     }
     private func permission(_ title: String, symbol: String, granted: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -340,6 +346,11 @@ struct SharpMenuView: View {
 
             Button(model.sharingEnabled ? "Pause Sharp" : "Resume Sharp") { model.toggleSharing() }
                 .buttonStyle(SharpButtonStyle(filled: model.sharingEnabled))
+            HStack {
+                Spacer()
+                Button("Quit Sharp") { model.shutdown(); NSApp.terminate(nil) }
+                    .buttonStyle(PlainButtonStyle()).font(.system(size: 12)).foregroundColor(SharpColor.dim)
+            }.padding(.top, -6)
         }
         .padding(20).frame(width: 340)
         .background(SharpColor.bg).foregroundColor(SharpColor.fg)
@@ -437,8 +448,12 @@ struct SharpAdvancedView: View {
         model.rememberedPeerID.flatMap { model.profiles[$0] }
     }
     private var interfaceNames: [String] {
-        let connected = activeWiredInterfaces().compactMap { $0.split(separator: " ").first.map(String.init) }
+        let connected = activeDirectInterfaces().map(\.interface.name)
         return Array(Set(connected + [model.preferredInterface])).filter { !$0.isEmpty }.sorted()
+    }
+    private func interfaceLabel(_ name: String) -> String {
+        let title = directInterface(named: name)?.displayName ?? name
+        return ipv4Address(interfaceName: name).map { "\(title) · \($0)" } ?? "\(title) · not connected"
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 19) {
@@ -470,16 +485,16 @@ struct SharpAdvancedView: View {
             if selectedProfile != nil {
 
             VStack(alignment: .leading, spacing: 7) {
-                Text("Ethernet interface").font(.system(size: 12, weight: .medium))
-                Picker("Ethernet interface", selection: Binding(
+                Text("Connection").font(.system(size: 12, weight: .medium))
+                Picker("Connection", selection: Binding(
                     get: { model.preferredInterface }, set: { model.chooseInterface($0) }
                 )) {
                     Text("Automatic").tag("")
                     ForEach(interfaceNames, id: \.self) { name in
-                        Text(ipv4Address(interfaceName: name).map { "\(name) · \($0)" } ?? "\(name) · unavailable").tag(name)
+                        Text(interfaceLabel(name)).tag(name)
                     }
                 }.labelsHidden()
-                Text("Automatic chooses the direct link.").font(.system(size: 11)).foregroundColor(SharpColor.dim)
+                Text("Automatic prefers Thunderbolt, then a direct Ethernet cable.").font(.system(size: 11)).foregroundColor(SharpColor.dim)
             }
 
             if model.role == .sender {

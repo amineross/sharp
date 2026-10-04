@@ -266,6 +266,9 @@ typedef struct h264_sample_context {
 
 
 extern volatile sig_atomic_t g_sharp_stop_requested;
+/* Set when ScreenCaptureKit ends the stream; main exits with SHARP_EXIT_CAPTURE_STOPPED. */
+extern volatile sig_atomic_t g_sharp_capture_stopped;
+#define SHARP_EXIT_CAPTURE_STOPPED 75
 
 @interface SharpScreenSender : NSObject <SCStreamOutput, SCStreamDelegate> {
     pthread_mutex_t _sendLock;
@@ -1088,7 +1091,7 @@ SCDisplay *find_display_with_id(SCShareableContent *content,
                                        CGDirectDisplayID displayID);
 SCShareableContent *sharp_copy_shareable_content(NSError **errorOut);
 NSRect sharp_appkit_frame_for_display(CGDirectDisplayID displayID);
-BOOL sharp_cursor_matches(NSCursor *cursor, NSCursor *candidate);
+size_t sharp_cursor_shapes_prepare(void);
 uint32_t sharp_cursor_image_id(NSCursor *cursor);
 int sharp_virtual_display_api_available(void);
 id sharp_create_virtual_display(uint32_t width,
@@ -1098,4 +1101,7 @@ id sharp_create_virtual_display(uint32_t width,
 int sharp_mirror_physical_display_from_virtual(
     CGDirectDisplayID physicalDisplayID,
     CGDirectDisplayID virtualDisplayID);
+int sharp_select_display_mode(CGDirectDisplayID displayID,
+                              uint32_t width,
+                              uint32_t height);
 int sharp_probe_virtual_display_creation(CGDirectDisplayID *displayIdOut);

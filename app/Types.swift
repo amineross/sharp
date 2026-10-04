@@ -42,7 +42,9 @@ enum SharpResolution: String, CaseIterable, Identifiable, Codable {
 
     func isSupported(for target: SharpDisplaySize) -> Bool {
         let size = size(for: target)
-        return size.0 <= 8192 && size.1 <= 8192 &&
+        // Hardware H.264 encoders stop at 4096 pixels wide; wider streams fall
+        // back to software encoding and become unusable during motion.
+        return size.0 <= 4096 && size.1 <= 8192 &&
             ((size.0 + 63) / 64) * ((size.1 + 63) / 64) <= 4096
     }
 
@@ -149,7 +151,8 @@ final class LineConnection {
     let connection: NWConnection
     private var buffer = Data()
     var onLine: ((String) -> Void)?
-    var onClosed: (() -> Void)?
+    /// Called once with the reason the connection ended.
+    var onClosed: ((String) -> Void)?
     private var closed = false
 
     init(_ connection: NWConnection) { self.connection = connection }
@@ -157,7 +160,8 @@ final class LineConnection {
     func start() {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
-            case .failed, .cancelled: self?.reportClosed()
+            case .failed(let error): self?.reportClosed("failed: \(error)")
+            case .cancelled: self?.reportClosed("closed by this Mac")
             default: break
             }
         }
@@ -168,7 +172,9 @@ final class LineConnection {
         guard let data = try? JSONEncoder().encode(value) else { return }
         var framed = data
         framed.append(0x0a)
-        connection.send(content: framed, completion: .contentProcessed { _ in })
+        connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+            if let error { self?.reportClosed("send failed: \(error)") }
+        })
     }
 
     func cancel() { connection.cancel() }
@@ -178,22 +184,23 @@ final class LineConnection {
             guard let self else { return }
             if let data { self.buffer.append(data) }
             guard self.buffer.count <= 64 * 1024 else {
-                self.connection.cancel(); self.reportClosed(); return
+                self.connection.cancel(); self.reportClosed("message too large"); return
             }
             while let newline = self.buffer.firstIndex(of: 0x0a) {
                 let lineData = self.buffer[..<newline]
                 self.buffer.removeSubrange(...newline)
                 if let line = String(data: lineData, encoding: .utf8) { self.onLine?(line) }
             }
-            if complete || error != nil { self.reportClosed(); return }
+            if let error { self.reportClosed("receive failed: \(error)"); return }
+            if complete { self.reportClosed("closed by the other Mac"); return }
             self.receive()
         }
     }
 
-    private func reportClosed() {
+    private func reportClosed(_ reason: String) {
         guard !closed else { return }
         closed = true
-        onClosed?()
+        onClosed?(reason)
     }
 }
 

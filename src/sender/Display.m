@@ -53,47 +53,127 @@ NSRect sharp_appkit_frame_for_display(CGDirectDisplayID displayID) {
     return mainScreen != nil ? mainScreen.frame : NSZeroRect;
 }
 
-BOOL sharp_cursor_matches(NSCursor *cursor, NSCursor *candidate) {
-    return cursor != nil && candidate != nil &&
-           (cursor == candidate || [cursor isEqual:candidate]);
+/*
+ * NSCursor.currentSystemCursor returns a new object on every call, so it never
+ * compares equal to NSCursor.IBeamCursor and friends. Recognise cursors by
+ * shape instead: a small alpha mask plus the hotspot, scale-independent so a
+ * larger pointer size in Accessibility still matches.
+ */
+#define SHARP_CURSOR_MASK 24
+typedef struct {
+    uint32_t image_id;
+    uint8_t mask[SHARP_CURSOR_MASK * SHARP_CURSOR_MASK];
+    double hotspot_x;
+    double hotspot_y;
+} sharp_cursor_shape_t;
+
+static sharp_cursor_shape_t g_cursor_shapes[32];
+static size_t g_cursor_shape_count;
+
+static BOOL sharp_cursor_shape(NSCursor *cursor, sharp_cursor_shape_t *shape) {
+    NSImage *image = cursor.image;
+    NSSize size = image.size;
+    if (image == nil || size.width < 1.0 || size.height < 1.0) {
+        return NO;
+    }
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL pixelsWide:SHARP_CURSOR_MASK pixelsHigh:SHARP_CURSOR_MASK
+                   bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+                  colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:SHARP_CURSOR_MASK * 4
+                    bitsPerPixel:32];
+    NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (rep == nil || context == nil) {
+        return NO;
+    }
+    double side = MAX(size.width, size.height);
+    double scale = SHARP_CURSOR_MASK / side;
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:context];
+    [image drawInRect:NSMakeRect(0, 0, size.width * scale, size.height * scale)
+             fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1.0];
+    [NSGraphicsContext restoreGraphicsState];
+    for (int i = 0; i < SHARP_CURSOR_MASK * SHARP_CURSOR_MASK; i++) {
+        shape->mask[i] = rep.bitmapData[i * 4 + 3];
+    }
+    shape->hotspot_x = cursor.hotSpot.x / side;
+    shape->hotspot_y = cursor.hotSpot.y / side;
+    return YES;
+}
+
+static void sharp_add_cursor_shape(NSCursor *cursor, uint32_t imageId) {
+    if (cursor == nil || g_cursor_shape_count >= sizeof(g_cursor_shapes) / sizeof(g_cursor_shapes[0])) {
+        return;
+    }
+    if (sharp_cursor_shape(cursor, &g_cursor_shapes[g_cursor_shape_count])) {
+        g_cursor_shapes[g_cursor_shape_count++].image_id = imageId;
+    }
+}
+
+size_t sharp_cursor_shapes_prepare(void) {
+    /* AppKit's cursor constants are nil until NSApplication exists. */
+    [NSApplication sharedApplication];
+    g_cursor_shape_count = 0;
+    sharp_add_cursor_shape(NSCursor.arrowCursor, SHARP_CURSOR_IMAGE_ARROW);
+    sharp_add_cursor_shape(NSCursor.IBeamCursor, SHARP_CURSOR_IMAGE_IBEAM);
+    sharp_add_cursor_shape(NSCursor.IBeamCursorForVerticalLayout, SHARP_CURSOR_IMAGE_IBEAM);
+    sharp_add_cursor_shape(NSCursor.pointingHandCursor, SHARP_CURSOR_IMAGE_LINK);
+    sharp_add_cursor_shape(NSCursor.dragLinkCursor, SHARP_CURSOR_IMAGE_LINK);
+    sharp_add_cursor_shape(NSCursor.crosshairCursor, SHARP_CURSOR_IMAGE_CROSSHAIR);
+    sharp_add_cursor_shape(NSCursor.openHandCursor, SHARP_CURSOR_IMAGE_MOVE);
+    sharp_add_cursor_shape(NSCursor.closedHandCursor, SHARP_CURSOR_IMAGE_MOVE);
+    sharp_add_cursor_shape(NSCursor.operationNotAllowedCursor, SHARP_CURSOR_IMAGE_UNAVAILABLE);
+    sharp_add_cursor_shape(NSCursor.dragCopyCursor, SHARP_CURSOR_IMAGE_ALTERNATE);
+    sharp_add_cursor_shape(NSCursor.contextualMenuCursor, SHARP_CURSOR_IMAGE_ALTERNATE);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    sharp_add_cursor_shape(NSCursor.resizeLeftRightCursor, SHARP_CURSOR_IMAGE_RESIZE_HORIZONTAL);
+    sharp_add_cursor_shape(NSCursor.resizeLeftCursor, SHARP_CURSOR_IMAGE_RESIZE_HORIZONTAL);
+    sharp_add_cursor_shape(NSCursor.resizeRightCursor, SHARP_CURSOR_IMAGE_RESIZE_HORIZONTAL);
+    sharp_add_cursor_shape(NSCursor.resizeUpDownCursor, SHARP_CURSOR_IMAGE_RESIZE_VERTICAL);
+    sharp_add_cursor_shape(NSCursor.resizeUpCursor, SHARP_CURSOR_IMAGE_RESIZE_VERTICAL);
+    sharp_add_cursor_shape(NSCursor.resizeDownCursor, SHARP_CURSOR_IMAGE_RESIZE_VERTICAL);
+#pragma clang diagnostic pop
+    if (@available(macOS 15.0, *)) {
+        /* macOS 15 window edges and corners use these system cursors. */
+        sharp_add_cursor_shape(NSCursor.columnResizeCursor, SHARP_CURSOR_IMAGE_RESIZE_HORIZONTAL);
+        sharp_add_cursor_shape(NSCursor.rowResizeCursor, SHARP_CURSOR_IMAGE_RESIZE_VERTICAL);
+        NSCursorFrameResizeDirections all = NSCursorFrameResizeDirectionsAll;
+        sharp_add_cursor_shape([NSCursor frameResizeCursorFromPosition:NSCursorFrameResizePositionLeft inDirections:all],
+                               SHARP_CURSOR_IMAGE_RESIZE_HORIZONTAL);
+        sharp_add_cursor_shape([NSCursor frameResizeCursorFromPosition:NSCursorFrameResizePositionTop inDirections:all],
+                               SHARP_CURSOR_IMAGE_RESIZE_VERTICAL);
+        sharp_add_cursor_shape([NSCursor frameResizeCursorFromPosition:NSCursorFrameResizePositionTopLeft inDirections:all],
+                               SHARP_CURSOR_IMAGE_RESIZE_DIAGONAL_NWSE);
+        sharp_add_cursor_shape([NSCursor frameResizeCursorFromPosition:NSCursorFrameResizePositionTopRight inDirections:all],
+                               SHARP_CURSOR_IMAGE_RESIZE_DIAGONAL_NESW);
+    }
+    return g_cursor_shape_count;
 }
 
 uint32_t sharp_cursor_image_id(NSCursor *cursor) {
-    if (sharp_cursor_matches(cursor, NSCursor.IBeamCursor)) {
-        return SHARP_CURSOR_IMAGE_IBEAM;
+    sharp_cursor_shape_t shape;
+    if (cursor == nil || !sharp_cursor_shape(cursor, &shape)) {
+        return SHARP_CURSOR_IMAGE_ARROW;
     }
-    if (sharp_cursor_matches(cursor, NSCursor.pointingHandCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.dragLinkCursor)) {
-        return SHARP_CURSOR_IMAGE_LINK;
+    uint32_t best = SHARP_CURSOR_IMAGE_ARROW;
+    double bestDistance = DBL_MAX;
+    for (size_t i = 0; i < g_cursor_shape_count; i++) {
+        const sharp_cursor_shape_t *candidate = &g_cursor_shapes[i];
+        double distance = 0.0;
+        for (int p = 0; p < SHARP_CURSOR_MASK * SHARP_CURSOR_MASK; p++) {
+            distance += abs((int)shape.mask[p] - (int)candidate->mask[p]);
+        }
+        distance /= SHARP_CURSOR_MASK * SHARP_CURSOR_MASK;
+        distance += 100.0 * (fabs(shape.hotspot_x - candidate->hotspot_x) +
+                             fabs(shape.hotspot_y - candidate->hotspot_y));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = candidate->image_id;
+        }
     }
-    if (sharp_cursor_matches(cursor, NSCursor.crosshairCursor)) {
-        return SHARP_CURSOR_IMAGE_CROSSHAIR;
-    }
-    if (sharp_cursor_matches(cursor, NSCursor.openHandCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.closedHandCursor)) {
-        return SHARP_CURSOR_IMAGE_MOVE;
-    }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    if (sharp_cursor_matches(cursor, NSCursor.resizeLeftRightCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.resizeLeftCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.resizeRightCursor)) {
-        return SHARP_CURSOR_IMAGE_RESIZE_HORIZONTAL;
-    }
-    if (sharp_cursor_matches(cursor, NSCursor.resizeUpDownCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.resizeUpCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.resizeDownCursor)) {
-        return SHARP_CURSOR_IMAGE_RESIZE_VERTICAL;
-    }
-#pragma clang diagnostic pop
-    if (sharp_cursor_matches(cursor, NSCursor.operationNotAllowedCursor)) {
-        return SHARP_CURSOR_IMAGE_UNAVAILABLE;
-    }
-    if (sharp_cursor_matches(cursor, NSCursor.dragCopyCursor) ||
-        sharp_cursor_matches(cursor, NSCursor.contextualMenuCursor)) {
-        return SHARP_CURSOR_IMAGE_ALTERNATE;
-    }
-    return SHARP_CURSOR_IMAGE_ARROW;
+    /* Identical system art scores 0; the closest distinct pair scores ~16.
+     * Anything else is an app's custom cursor: draw the arrow. */
+    return bestDistance <= 8.0 ? best : SHARP_CURSOR_IMAGE_ARROW;
 }
 
 int sharp_virtual_display_api_available(void) {
@@ -250,6 +330,45 @@ int sharp_mirror_physical_display_from_virtual(
         return 0;
     }
     return 1;
+}
+
+int sharp_select_display_mode(CGDirectDisplayID displayID,
+                              uint32_t width,
+                              uint32_t height) {
+    /*
+     * Above roughly 3200x1800, macOS brings a new virtual display up in a
+     * 1920x1080 mode even when the requested mode is its only native one.
+     * Select the 1x mode explicitly; ForAppOnly reverts it when we exit.
+     */
+    NSDictionary *options = @{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES};
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)options);
+    if (modes == NULL) {
+        return 0;
+    }
+    CGDisplayModeRef match = NULL;
+    for (CFIndex i = 0; i < CFArrayGetCount(modes); i++) {
+        CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if (CGDisplayModeGetWidth(mode) == width && CGDisplayModeGetHeight(mode) == height &&
+            CGDisplayModeGetPixelWidth(mode) == width &&
+            CGDisplayModeGetPixelHeight(mode) == height) {
+            match = mode;
+            break;
+        }
+    }
+    int selected = 0;
+    CGDisplayConfigRef configuration = NULL;
+    if (match != NULL && CGBeginDisplayConfiguration(&configuration) == kCGErrorSuccess &&
+        configuration != NULL) {
+        CGError error = CGConfigureDisplayWithDisplayMode(configuration, displayID, match, NULL);
+        if (error == kCGErrorSuccess) {
+            error = CGCompleteDisplayConfiguration(configuration, kCGConfigureForAppOnly);
+        } else {
+            CGCancelDisplayConfiguration(configuration);
+        }
+        selected = error == kCGErrorSuccess;
+    }
+    CFRelease(modes);
+    return selected;
 }
 
 int sharp_probe_virtual_display_creation(CGDirectDisplayID *displayIdOut) {

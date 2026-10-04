@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import CryptoKit
+import IOKit.pwr_mgt
 import Network
 import ServiceManagement
 import SwiftUI
@@ -59,11 +60,43 @@ final class SharpModel: ObservableObject {
     var rememberedPeerID: String?
     var listener: NWListener?
     var browser: NWBrowser?
-    var control: LineConnection?
+    var control: LineConnection? {
+        didSet { activeLinkLabel = control.flatMap { linkLabel(for: $0.connection.currentPath) }; updatePowerActivities() }
+    }
+    /// "Thunderbolt", "Ethernet", or "Ethernet · 100 Mb/s" for the current connection.
+    @Published var activeLinkLabel: String?
     var pendingConnection: NWConnection?
     var senderProcess: Process?
-    var receiverProcess: Process?
+    var receiverProcess: Process? { didSet { updatePowerActivities() } }
+    /// Helpers asked to quit but possibly still holding the stream port or virtual display.
+    var retiringSender: Process?
+    var retiringReceiver: Process?
+    var senderGeneration = 0
+    var receiverGeneration = 0
+    var senderStartedAt = Date.distantPast
     var reconnectWork: DispatchWorkItem?
+    var reconnectFailures = 0
+    /// Status that should survive the disconnect it caused, such as a rejection,
+    /// for as long as Sharp avoids the rejected link.
+    var disconnectStatus: String? {
+        get { disconnectStatusExpiry > Date() ? storedDisconnectStatus : nil }
+        set { storedDisconnectStatus = newValue; disconnectStatusExpiry = Date().addingTimeInterval(60) }
+    }
+    private var storedDisconnectStatus: String?
+    private var disconnectStatusExpiry = Date.distantPast
+    var rejectedInterfaces: [String: Date] = [:]
+    var captureRestartWork: DispatchWorkItem?
+    var captureRestartAttempts = 0
+    var screensAsleep = false
+    /// Keeps App Nap from delaying heartbeats while a connection is up.
+    var sessionActivity: NSObjectProtocol?
+    /// Keeps the display Mac's screen on while it shows the sender.
+    var displayActivity: NSObjectProtocol?
+    var peerDisplayAsleep = false { didSet { updatePowerActivities() } }
+    var controlPortInUse = false
+    @Published var localNetworkRequested = false
+    @Published var localNetworkDenied = false
+    var localNetworkProbe: NWBrowser?
     var heartbeatWork: DispatchWorkItem?
     var lastControlMessage = Date.distantPast
     var senderTail: [String] = []
@@ -173,6 +206,11 @@ final class SharpModel: ObservableObject {
                 control?.send(ControlMessage(command: "restart", peerID: peerID, peerName: Host.current().localizedName ?? "Mac",
                                              mode: displayMode.rawValue, cursorScale: cursorScale, cursorHue: cursorHue))
                 status = "Applying settings…"
+            } else if role == .sender, control != nil {
+                // Mode and resolution only need a new stream, not a new connection.
+                stopSender()
+                sendStartRequest()
+                status = "Applying settings…"
             } else {
                 restartRole()
             }
@@ -214,7 +252,7 @@ final class SharpModel: ObservableObject {
             control?.send(ControlMessage(command: "stop", peerID: peerID,
                 peerName: Host.current().localizedName ?? "Mac", sharingEnabled: false))
             stopSender(); stopReceiver()
-            status = isPeerConnected ? "Paused" : "Connect an Ethernet cable"
+            status = isPeerConnected ? "Paused" : "Connect an Ethernet or Thunderbolt cable"
         } else if control != nil {
             control?.send(ControlMessage(command: "resume", peerID: peerID,
                 peerName: Host.current().localizedName ?? "Mac", sharingEnabled: true))
@@ -232,7 +270,17 @@ final class SharpModel: ObservableObject {
 
     var connectionDetail: String {
         if connectionStatus == .disconnected { return "No Mac connected" }
-        return peerName.isEmpty ? "Waiting for the other Mac" : peerName
+        let name = peerName.isEmpty ? "Waiting for the other Mac" : peerName
+        return activeLinkLabel.map { "\(name) · \($0)" } ?? name
+    }
+
+    func linkLabel(for path: NWPath?) -> String? {
+        guard let name = interfaceName(forIPv4: directIPv4Address(for: path) ?? ""),
+              let link = directInterface(named: name) else { return nil }
+        if link.kind == .ethernet, let speed = linkSpeed(interfaceName: name), speed <= 150_000_000 {
+            return "Ethernet · \(speed / 1_000_000) Mb/s"
+        }
+        return link.kind.rawValue
     }
 
     func confirmAudioPermission() {
@@ -313,6 +361,70 @@ final class SharpModel: ObservableObject {
         }
     }
 
+    /// The sending Mac's screens slept or woke. A display Mac follows, like a monitor.
+    func screensDidSleep() {
+        screensAsleep = true
+        guard configured, role == .sender, control != nil else { return }
+        trace("screens did sleep")
+        control?.send(ControlMessage(command: "display-sleep", peerID: peerID, peerName: Host.current().localizedName ?? "Mac"))
+    }
+
+    func screensDidWake() {
+        screensAsleep = false
+        guard configured, role == .sender, control != nil else { return }
+        trace("screens did wake")
+        control?.send(ControlMessage(command: "display-wake", peerID: peerID, peerName: Host.current().localizedName ?? "Mac"))
+        if captureRestartWork != nil { restartCapture() }
+    }
+
+    /// ScreenCaptureKit ended the stream (screen saver, lock, display change).
+    /// Keep the connection and start a new capture with backoff.
+    func scheduleCaptureRestart() {
+        if Date().timeIntervalSince(senderStartedAt) > 30 { captureRestartAttempts = 0 }
+        captureRestartAttempts += 1
+        let delay = min(30.0, pow(2.0, Double(captureRestartAttempts)))
+        trace("capture stopped; restarting in \(Int(delay))s")
+        status = "Screen capture stopped. Resuming…"
+        captureRestartWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in Task { @MainActor in self?.restartCapture() } }
+        captureRestartWork = work
+        // Capture cannot resume while the screens sleep; screensDidWake retries.
+        if !screensAsleep { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }
+    }
+
+    func restartCapture() {
+        guard !screensAsleep else { return }
+        captureRestartWork?.cancel(); captureRestartWork = nil
+        guard control != nil, sharingEnabled, senderProcess == nil else { return }
+        sendStartRequest()
+    }
+
+    func updatePowerActivities() {
+        let info = ProcessInfo.processInfo
+        if control != nil, sessionActivity == nil {
+            sessionActivity = info.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                 reason: "Sharp keeps its connection responsive")
+        } else if control == nil, let activity = sessionActivity {
+            info.endActivity(activity); sessionActivity = nil
+        }
+        let showing = role == .receiver && receiverProcess != nil && !peerDisplayAsleep
+        if showing, displayActivity == nil {
+            displayActivity = info.beginActivity(options: [.userInitiated, .idleDisplaySleepDisabled],
+                                                 reason: "Sharp is showing another Mac's screen")
+            wakeDisplay()
+        } else if !showing, let activity = displayActivity {
+            info.endActivity(activity); displayActivity = nil
+        }
+    }
+
+    func wakeDisplay() {
+        var assertion = IOPMAssertionID(0)
+        if IOPMAssertionDeclareUserActivity("Sharp is showing another Mac's screen" as CFString,
+                                            kIOPMUserActiveLocal, &assertion) == kIOReturnSuccess {
+            IOPMAssertionRelease(assertion)
+        }
+    }
+
     func runProbes() {
         var next: [ProbeResult] = []
         let osOK: Bool
@@ -327,11 +439,18 @@ final class SharpModel: ObservableObject {
         let helpers = [senderURL, receiverURL].allSatisfy { FileManager.default.isExecutableFile(atPath: $0.path) }
         next.append(.init(id: "helpers", level: helpers ? .pass : .fatal,
                           title: "Packaged engines", detail: helpers ? "Sender and receiver are included" : "Sharp is incomplete; reinstall the app"))
-        let wired = activeWiredInterfaces().filter {
-            preferredInterface.isEmpty || $0.hasPrefix(preferredInterface + " ")
+        let links = activeDirectInterfaces().filter { preferredInterface.isEmpty || $0.interface.name == preferredInterface }
+        next.append(.init(id: "ethernet", level: links.isEmpty ? .warning : .pass, title: "Direct link",
+                          detail: links.isEmpty ? "Connect an Ethernet or Thunderbolt cable"
+                              : links.map { "\($0.interface.displayName) · \($0.interface.name) (\($0.address))" }.joined(separator: ", ")))
+        if let slow = links.first(where: { $0.interface.kind == .ethernet && (linkSpeed(interfaceName: $0.interface.name) ?? .max) <= 150_000_000 }) {
+            next.append(.init(id: "speed", level: .warning, title: "Link speed",
+                              detail: "\(slow.interface.displayName) runs at 100 Mb/s. A Gigabit adapter makes motion smooth."))
         }
-        next.append(.init(id: "ethernet", level: wired.isEmpty ? .warning : .pass,
-                          title: "Ethernet", detail: wired.isEmpty ? "Connect a direct Ethernet cable" : wired.joined(separator: ", ")))
+        if localNetworkDenied {
+            next.append(.init(id: "local-network", level: .warning, title: "Local Network",
+                              detail: "Turn on Sharp in System Settings › Privacy & Security › Local Network"))
+        }
         if role == .sender {
             let size = selectedStreamSize
             let encoder = h264HardwareEncoderAvailable(width: size.0, height: size.1)
@@ -372,8 +491,7 @@ final class SharpModel: ObservableObject {
         stopNetworking()
         linkState = peerReportedSleep ? .sleeping : .waiting
         runProbes()
-        let wiredSummary = activeWiredInterfaces().joined(separator: ",")
-        trace("start role=\(role.rawValue) wired=\(wiredSummary)")
+        trace("start role=\(role.rawValue) links=\(activeDirectSummary().joined(separator: ","))")
         guard !probes.contains(where: { $0.level == .fatal && $0.id != "capture" }) else {
             status = probes.first(where: { $0.level == .fatal })?.detail ?? "This Mac is not ready"; return
         }
@@ -400,9 +518,27 @@ final class SharpModel: ObservableObject {
     func stopSender() {
         if benchmarkRunning { stopBenchmark(reason: "Stream stopped") }
         streamDisplayID = nil
-        stopAudio(); audioSourceIP = nil; audioReceiverIP = nil; terminate(senderProcess); senderProcess = nil
+        senderGeneration += 1
+        captureRestartWork?.cancel(); captureRestartWork = nil
+        stopAudio(); audioSourceIP = nil; audioReceiverIP = nil
+        if let process = senderProcess { terminate(process); retiringSender = process }
+        senderProcess = nil
     }
-    func stopReceiver() { benchmarkPeerScene = nil; receiverInput = nil; stopAudio(); receiverReady = nil; terminate(receiverProcess); receiverProcess = nil }
+    func stopReceiver() {
+        benchmarkPeerScene = nil; receiverInput = nil; stopAudio(); receiverReady = nil
+        receiverGeneration += 1
+        if let process = receiverProcess { terminate(process); retiringReceiver = process }
+        receiverProcess = nil
+    }
+
+    /// Runs `body` once `process` has exited. terminate() kills it after 2 s,
+    /// so this waits at most a little longer than that.
+    func whenExited(_ process: Process?, polls: Int = 0, _ body: @escaping @MainActor () -> Void) {
+        guard let process, process.isRunning, polls < 80 else { body(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            Task { @MainActor in self?.whenExited(process, polls: polls + 1, body) }
+        }
+    }
     func stopNetworking() {
         pendingConnection?.cancel(); pendingConnection = nil
         browser?.cancel(); browser = nil
@@ -416,6 +552,10 @@ final class SharpModel: ObservableObject {
     func scheduleReconnect() {
         guard configured, !localSleeping else { return }
         reconnectWork?.cancel()
+        // Back off when attempts keep failing instead of retrying every second.
+        let delays: [Double] = [1, 1, 2, 4, 8, 10]
+        let delay = delays[min(reconnectFailures, delays.count - 1)]
+        reconnectFailures += 1
         let work = DispatchWorkItem { [weak self] in
             Task { @MainActor in
                 guard let self, self.configured, !self.localSleeping,
@@ -424,7 +564,7 @@ final class SharpModel: ObservableObject {
             }
         }
         reconnectWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     func startHeartbeat() {
@@ -445,8 +585,10 @@ final class SharpModel: ObservableObject {
     func heartbeatTick() {
         guard let control, !localSleeping else { return }
         if Date().timeIntervalSince(lastControlMessage) > 4 {
+            let reason = "no reply for \(Int(Date().timeIntervalSince(lastControlMessage)))s"
             control.cancel()
             if role == .receiver {
+                trace("disconnected: \(reason)")
                 self.control = nil
                 stopReceiver()
                 linkState = peerReportedSleep ? .sleeping : .waiting
@@ -454,7 +596,7 @@ final class SharpModel: ObservableObject {
                     ? "\(peerName.isEmpty ? "The sender" : peerName) is asleep"
                     : "Waiting for a Sharp connection"
             } else {
-                handleDisconnect()
+                handleDisconnect(reason: reason)
             }
             return
         }
@@ -471,12 +613,62 @@ final class SharpModel: ObservableObject {
     }
 
     func directPathProblem(_ path: NWPath?) -> String? {
-        guard let path, path.usesInterfaceType(.wiredEthernet) else { return "Connect both Macs with Ethernet" }
-        guard let address = wiredIPv4Address(for: path) else { return "This Ethernet link needs an IPv4 address" }
+        guard let path, let address = directIPv4Address(for: path) else {
+            return path?.usesInterfaceType(.wifi) == true
+                ? "Sharp needs Ethernet or Thunderbolt, not Wi-Fi"
+                : "Connect both Macs with Ethernet or Thunderbolt"
+        }
         if !preferredInterface.isEmpty && ipv4Address(interfaceName: preferredInterface) != address {
-            return "The selected Ethernet interface is not connected to this Mac"
+            return "The selected connection is not linked to this Mac"
         }
         return nil
+    }
+
+    /// Network parameters for discovery and control: anything but wireless.
+    /// Thunderbolt Bridge is not `.wiredEthernet`, so we cannot require that type.
+    var directParameters: NWParameters {
+        let parameters = NWParameters.tcp
+        parameters.prohibitedInterfaceTypes = [.wifi, .cellular]
+        return parameters
+    }
+
+    func isLocalNetworkDenied(_ error: NWError) -> Bool {
+        if case .dns(let code) = error { return code == -65570 } // kDNSServiceErr_PolicyDenied
+        return false
+    }
+
+    /// macOS 15 asks for Local Network access the first time Sharp browses.
+    /// Ask during setup so the prompt is not hidden behind a waiting state.
+    func requestLocalNetworkAccess() {
+        guard #available(macOS 15.0, *), localNetworkProbe == nil else { return }
+        localNetworkRequested = true
+        let browser = NWBrowser(for: .bonjour(type: serviceType, domain: nil), using: .tcp)
+        browser.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in self?.noteDiscoveryState(state) }
+        }
+        browser.browseResultsChangedHandler = { [weak self] _, _ in
+            Task { @MainActor in self?.localNetworkDenied = false }
+        }
+        browser.start(queue: queue)
+        localNetworkProbe = browser
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.localNetworkProbe?.cancel(); self?.localNetworkProbe = nil
+        }
+    }
+
+    func noteDiscoveryState(_ state: NWBrowser.State) {
+        if case .waiting(let error) = state, isLocalNetworkDenied(error) {
+            localNetworkDenied = true
+            status = "Allow Local Network access for Sharp in System Settings"
+        } else if case .ready = state, localNetworkDenied {
+            localNetworkDenied = false
+        }
+    }
+
+    func openLocalNetworkSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     func persist() {

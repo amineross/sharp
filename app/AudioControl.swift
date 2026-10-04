@@ -76,7 +76,7 @@ extension SharpModel {
         if message.command == "audio-start", role == .receiver,
            receiverProcess?.isRunning == true, let token = message.audioToken,
            UUID(uuidString: token) != nil,
-           let address = wiredIPv4Address(for: control?.connection.currentPath) {
+           let address = directIPv4Address(for: control?.connection.currentPath) {
             stopAudio(); audioToken = token; audioEnabled = true; audioStatus = "Connecting audio…"
             let route = makeAudioRoute(token: token)
             audioRoute = route

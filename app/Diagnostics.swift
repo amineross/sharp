@@ -40,17 +40,18 @@ extension SharpModel {
         Processes: sender=\(senderProcess?.processIdentifier ?? 0) receiver=\(receiverProcess?.processIdentifier ?? 0)
         Last control message: \(lastControlMessage)
         Control path: \(String(describing: control?.connection.currentPath))
+        Link: \(activeLinkLabel ?? "none")
+        Power: connection=\(sessionActivity != nil) display=\(displayActivity != nil) peer_display_asleep=\(peerDisplayAsleep)
 
         Checks
         \(probes.map { "[\($0.level.rawValue)] \($0.title) — \($0.detail)" }.joined(separator: "\n"))
 
-        Ethernet
+        Direct links
         """
-        let wired = activeWiredInterfaces()
-        if wired.isEmpty { report += "No active wired IPv4 interface\n" }
-        for item in wired {
-            let name = String(item.prefix(while: { $0 != " " }))
-            report += "\n\(run(URL(fileURLWithPath: "/sbin/ifconfig"), [name]).output)"
+        let links = activeDirectInterfaces()
+        if links.isEmpty { report += "No Ethernet or Thunderbolt link with an IPv4 address\n" }
+        for link in links {
+            report += "\n\(link.interface.displayName)\n\(run(URL(fileURLWithPath: "/sbin/ifconfig"), [link.interface.name]).output)"
         }
         report += "\nControl events (latest \(controlTail.count))\n\(controlTail.joined(separator: "\n"))\n"
         report += "\nSender output (latest \(senderTail.count))\n\(senderTail.joined(separator: "\n"))\n"

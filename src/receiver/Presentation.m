@@ -136,25 +136,7 @@
     cursorSnapshot.hotspot_x = _cursorHotspotX;
     cursorSnapshot.hotspot_y = _cursorHotspotY;
     cursorSnapshot.image_id = _cursorImageId;
-    uint64_t cursorNowNs = shtp_now_ns();
-    if (_cursorVisible && _cursorPrevSampleNs != 0u &&
-        _cursorSampleNs > _cursorPrevSampleNs && _cursorLastRxNs != 0u &&
-        cursorNowNs >= _cursorLastRxNs &&
-        cursorNowNs - _cursorLastRxNs <= 20000000ULL) {
-        uint64_t sampleDeltaNs = _cursorSampleNs - _cursorPrevSampleNs;
-        if (sampleDeltaNs >= 1000000ULL && sampleDeltaNs <= 100000000ULL) {
-            uint64_t predictNs = MIN(cursorNowNs - _cursorLastRxNs, 8000000ULL);
-            double fraction = (double)predictNs / (double)sampleDeltaNs;
-            double predictedX = (double)_cursorX +
-                                (double)(_cursorX - _cursorPrevX) * fraction;
-            double predictedY = (double)_cursorY +
-                                (double)(_cursorY - _cursorPrevY) * fraction;
-            cursorSnapshot.x = (int32_t)llround(
-                MAX(0.0, MIN((double)_config.width - 1.0, predictedX)));
-            cursorSnapshot.y = (int32_t)llround(
-                MAX(0.0, MIN((double)_config.height - 1.0, predictedY)));
-        }
-    }
+    [self interpolateCursorAt:shtp_now_ns() into:&cursorSnapshot];
     if (_verifiedReceiver && videoSnapshotCount) {
         const sharp_video_layer_snapshot_t *video=&videoSnapshots[0];
         const sharp_hybrid_map_t *map=sharp_hybrid_find_map(_verifiedReceiver,video->header.generation);

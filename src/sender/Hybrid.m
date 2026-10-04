@@ -30,7 +30,8 @@
     if ([self ensureCleanupCapacity:_verifiedSource->total]!=0) exit(1);
     _verifiedDropStaticMaps=(uint32_t)env_double_or_default("SHARP_TEST_HYBRID_DROP_STATIC_MAPS",0);
     _frameId=1; _fullFrameEnabled=YES;
-    atomic_store(&_verifiedPacingBps,(uint64_t)(_pacingMbps*1000000.0));
+    /* Fast links start at the Gigabit rate and ramp up on acknowledgements. */
+    atomic_store(&_verifiedPacingBps,(uint64_t)(MIN(_pacingMbps,600.0)*1000000.0));
     _verifiedHandshakeStartNs=shtp_now_ns();
     _verifiedTimer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_processingQueue);
     dispatch_source_set_timer(_verifiedTimer,dispatch_time(DISPATCH_TIME_NOW,0),10000000ULL,1000000ULL);
@@ -203,7 +204,7 @@
     if (_pacingMbps>120 && now-_verifiedPacingAdjustNs>=500000000ULL) {
         uint64_t rate=atomic_load(&_verifiedPacingBps),ceiling=(uint64_t)(_pacingMbps*1000000.0);
         if (overdue>=MAX(16u,outstanding/4u)) rate=MAX(120000000ULL,rate*3/4);
-        else if (!overdue) rate=MIN(ceiling,rate+30000000ULL);
+        else if (!overdue) rate=MIN(ceiling,rate+MAX(30000000ULL,ceiling/20));
         atomic_store(&_verifiedPacingBps,rate);_verifiedPacingAdjustNs=now;
     }
     for (uint32_t scanned=0;scanned<m.total && count<limit;scanned++) {

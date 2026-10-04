@@ -5,6 +5,10 @@
     (void)stream;
     fprintf(stderr, "m1-screen-send stream stopped: %s\n",
             error.localizedDescription.UTF8String);
+    /* A stopped stream never resumes. Exit so the app can restart capture
+     * instead of leaving the receiver on a frozen frame. */
+    g_sharp_capture_stopped = 1;
+    g_sharp_stop_requested = 1;
 }
 
 - (void)stream:(SCStream *)stream

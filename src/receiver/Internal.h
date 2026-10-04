@@ -135,6 +135,17 @@ typedef struct sharp_cursor_snapshot {
     uint32_t image_id;
 } sharp_cursor_snapshot_t;
 
+/* Cursor samples on the sender's clock, replayed slightly late so motion is
+ * interpolated between real positions instead of guessed from arrival times. */
+#define SHARP_CURSOR_HISTORY 32u
+typedef struct sharp_cursor_sample {
+    uint64_t sample_ns;
+    int32_t x;
+    int32_t y;
+    uint32_t image_id;
+    uint32_t visible;
+} sharp_cursor_sample_t;
+
 typedef struct sharp_cursor_texture_slot {
     GLuint texture;
     uint32_t width;
@@ -518,6 +529,12 @@ typedef struct sharp_h264_region_stats {
     uint16_t _cursorHotspotX;
     uint16_t _cursorHotspotY;
     uint32_t _cursorImageId;
+    sharp_cursor_sample_t _cursorHistory[SHARP_CURSOR_HISTORY];
+    uint32_t _cursorHistoryCount;
+    uint32_t _cursorHistoryNewest;
+    int64_t _cursorClockOffsetNs;
+    uint64_t _cursorClockUpdatedNs;
+    uint64_t _cursorPlayoutNs;
     BOOL _cursorVisible;
     uint64_t _h264RecoveredGenerations;
     uint64_t _h264UnrecoveredGenerations;
@@ -719,6 +736,8 @@ typedef struct sharp_h264_region_stats {
 - (void)handlePingDatagram:(const shtp_header_t *)sh;
 - (void)handleCursorDatagram:(const shtp_header_t *)sh
                      payload:(const uint8_t *)payload;
+- (void)recordCursorSample:(uint64_t)sampleNs receivedNs:(uint64_t)rxNs;
+- (void)interpolateCursorAt:(uint64_t)nowNs into:(sharp_cursor_snapshot_t *)cursor;
 - (uint16_t)sendMissingVsliceNacksForRegion:(uint16_t)regionId
                                   generation:(uint32_t)generation
                                  includeTail:(BOOL)includeTail;

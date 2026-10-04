@@ -749,6 +749,8 @@
         { SHARP_CURSOR_IMAGE_RESIZE_VERTICAL, @"vertical resize.cur" },
         { SHARP_CURSOR_IMAGE_UNAVAILABLE, @"Unavailable.cur" },
         { SHARP_CURSOR_IMAGE_ALTERNATE, @"Alternate Select.cur" },
+        { SHARP_CURSOR_IMAGE_RESIZE_DIAGONAL_NWSE, @"Diagonal resize 1.cur" },
+        { SHARP_CURSOR_IMAGE_RESIZE_DIAGONAL_NESW, @"Diagonal resize 2.cur" },
     };
     uint32_t loaded = 0u;
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -757,7 +759,7 @@
             loaded++;
         }
     }
-    fprintf(stdout, "m1-display-cursor theme_loaded=%u sample_hz=240 prediction_ms=8\n",
+    fprintf(stdout, "m1-display-cursor theme_loaded=%u playout=interpolated\n",
             loaded);
 }
 
