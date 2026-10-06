@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DistributedNotificationCenter.default().addObserver(self, selector: #selector(screensDidWake),
                                                                 name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
             self.installStatusItem()
+            self.scheduleUpdateCheck()
             SharpModel.shared.activate()
             if !SharpModel.shared.configured { self.showPermission() }
             else if SharpModel.shared.needsScreenPermission { self.showPermission() }
@@ -91,6 +92,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             SharpModel.shared.refreshAfterActivation()
         }
+    }
+
+    /// Once a day, ask aminerostane.com for the latest build and mention it
+    /// once per version. Nothing about this Mac is sent.
+    @MainActor func scheduleUpdateCheck() {
+        checkForUpdate()
+        Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { _ in
+            Task { @MainActor in AppDelegate.shared?.checkForUpdate() }
+        }
+    }
+
+    @MainActor func checkForUpdate() {
+        guard let url = URL(string: "https://aminerostane.com/sharp/version.json") else { return }
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data, let latest = try? JSONDecoder().decode(SharpLatestVersion.self, from: data) else { return }
+            Task { @MainActor in AppDelegate.shared?.offerUpdate(latest) }
+        }.resume()
+    }
+
+    @MainActor func offerUpdate(_ latest: SharpLatestVersion) {
+        let defaults = UserDefaults.standard
+        let current = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0
+        guard latest.build > current, defaults.integer(forKey: "updateOfferedBuild") < latest.build,
+              let page = URL(string: latest.url) else { return }
+        defaults.set(latest.build, forKey: "updateOfferedBuild")
+        let alert = NSAlert()
+        alert.messageText = "Sharp \(latest.version) is available"
+        alert.informativeText = "Download it at aminerostane.com/sharp."
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(page) }
     }
 
     @MainActor @objc private func systemWillSleep() {
@@ -288,4 +322,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.terminate(nil)
     }
+}
+
+struct SharpLatestVersion: Decodable {
+    let version: String
+    let build: Int
+    let url: String
 }

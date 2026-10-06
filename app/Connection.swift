@@ -259,24 +259,37 @@ extension SharpModel {
         let candidates = results.filter { result in
             guard case .service(let name, _, _, let interface) = result.endpoint else { return false }
             if let interface, direct[interface.name] == nil { return false }
-            if let interface, !preferredInterface.isEmpty && interface.name != preferredInterface { return false }
+            if let interface, !pinnedInterface.isEmpty && interface.name != pinnedInterface { return false }
             if let interface, rejectedInterfaces[interface.name] != nil { return false }
             return rememberedPeerID == nil || rememberedPeerID == name
         }.sorted { rank($0, direct) < rank($1, direct) }
-        trace("direct candidates=\(candidates.count) remembered=\(rememberedPeerID ?? "none")")
+        trace("direct candidates=\(candidates.count) remembered=\(rememberedPeerID ?? "none") pinned=\(pinnedInterface.isEmpty ? "auto" : pinnedInterface)")
         guard let result = candidates.first else { return }
-        connect(result.endpoint)
+        // A service endpoint can carry no interface; pin the attempt to the
+        // best cable it was seen on so Network never tries the peer's Wi-Fi.
+        let interface = result.interfaces
+            .filter { direct[$0.name] != nil && rejectedInterfaces[$0.name] == nil &&
+                      (pinnedInterface.isEmpty || $0.name == pinnedInterface) }
+            .min { linkRank($0.name, direct) < linkRank($1.name, direct) }
+        connect(result.endpoint, over: interface)
     }
 
     /// Thunderbolt first, then cables with self-assigned addresses (a direct
     /// link), then wired networks shared with other devices.
     private func rank(_ result: NWBrowser.Result, _ direct: [String: SharpDirectInterface]) -> Int {
-        guard case .service(_, _, _, let interface?) = result.endpoint, let link = direct[interface.name] else { return 3 }
+        guard case .service(_, _, _, let interface?) = result.endpoint else {
+            return result.interfaces.map { linkRank($0.name, direct) }.min() ?? 3
+        }
+        return linkRank(interface.name, direct)
+    }
+
+    private func linkRank(_ name: String, _ direct: [String: SharpDirectInterface]) -> Int {
+        guard let link = direct[name] else { return 3 }
         if link.kind == .thunderbolt { return 0 }
         return ipv4Address(interfaceName: link.name)?.hasPrefix("169.254.") == true ? 1 : 2
     }
 
-    func connect(_ endpoint: NWEndpoint) {
+    func connect(_ endpoint: NWEndpoint, over interface: NWInterface? = nil) {
         guard !localSleeping else { return }
         // Monterey can stall forever when a Bonjour service endpoint is combined
         // with requiredInterfaceType. The browser is Ethernet-only, and the ready
@@ -284,7 +297,10 @@ extension SharpModel {
         // Keep Wi-Fi out of the race: macOS otherwise tries it first and the
         // attempt stalls until our timeout.
         var parameters = NWParameters.tcp
-        if #available(macOS 13.0, *) { parameters = directParameters }
+        if #available(macOS 13.0, *) {
+            parameters = directParameters
+            if let interface { parameters.requiredInterface = interface }
+        }
         // The stream runs over IPv4, so the control link must too. Over IPv6
         // link-local, macOS can pick an interface with no IPv4 address, such
         // as a bridge member.

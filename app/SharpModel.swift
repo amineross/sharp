@@ -439,7 +439,7 @@ final class SharpModel: ObservableObject {
         let helpers = [senderURL, receiverURL].allSatisfy { FileManager.default.isExecutableFile(atPath: $0.path) }
         next.append(.init(id: "helpers", level: helpers ? .pass : .fatal,
                           title: "Packaged engines", detail: helpers ? "Sender and receiver are included" : "Sharp is incomplete; reinstall the app"))
-        let links = activeDirectInterfaces().filter { preferredInterface.isEmpty || $0.interface.name == preferredInterface }
+        let links = activeDirectInterfaces().filter { pinnedInterface.isEmpty || $0.interface.name == pinnedInterface }
         next.append(.init(id: "ethernet", level: links.isEmpty ? .warning : .pass, title: "Direct link",
                           detail: links.isEmpty ? "Connect an Ethernet or Thunderbolt cable"
                               : links.map { "\($0.interface.displayName) · \($0.interface.name) (\($0.address))" }.joined(separator: ", ")))
@@ -618,7 +618,7 @@ final class SharpModel: ObservableObject {
                 ? "Sharp needs Ethernet or Thunderbolt, not Wi-Fi"
                 : "Connect both Macs with Ethernet or Thunderbolt"
         }
-        if !preferredInterface.isEmpty && ipv4Address(interfaceName: preferredInterface) != address {
+        if !pinnedInterface.isEmpty && ipv4Address(interfaceName: pinnedInterface) != address {
             return "The selected connection is not linked to this Mac"
         }
         return nil
@@ -626,6 +626,14 @@ final class SharpModel: ObservableObject {
 
     /// Network parameters for discovery and control: anything but wireless.
     /// Thunderbolt Bridge is not `.wiredEthernet`, so we cannot require that type.
+    /// The cable chosen in Advanced, while it is plugged in. A chosen port with
+    /// no cable must not block another link, so Sharp falls back to Automatic.
+    var pinnedInterface: String {
+        guard !preferredInterface.isEmpty,
+              activeDirectInterfaces().contains(where: { $0.interface.name == preferredInterface }) else { return "" }
+        return preferredInterface
+    }
+
     var directParameters: NWParameters {
         let parameters = NWParameters.tcp
         parameters.prohibitedInterfaceTypes = [.wifi, .cellular]

@@ -105,6 +105,11 @@ struct AppStateCheck {
         assert(report.contains("Connection: Paused — Display Mac"))
         assert(report.contains("Sender output") && report.contains("Receiver output") && report.contains("Direct links"))
         assert(model.sessionActivity == nil, "No App Nap exemption without a connection")
+        let chosen = model.preferredInterface
+        model.preferredInterface = "en99"
+        assert(model.pinnedInterface.isEmpty, "A chosen port with no cable must fall back to Automatic")
+        assert(model.directPathProblem(nil) != "The selected connection is not linked to this Mac")
+        model.preferredInterface = chosen
         print("App state PASS: audio preference, sleep state, peer identity and diagnostics")
     }
 }
