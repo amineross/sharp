@@ -259,6 +259,8 @@ extension SharpModel {
         let candidates = results.filter { result in
             guard case .service(let name, _, _, let interface) = result.endpoint else { return false }
             if let interface, direct[interface.name] == nil { return false }
+            // Seen only on Wi-Fi: no cable leads to this Mac yet.
+            if interface == nil, !result.interfaces.contains(where: { direct[$0.name] != nil }) { return false }
             if let interface, !pinnedInterface.isEmpty && interface.name != pinnedInterface { return false }
             if let interface, rejectedInterfaces[interface.name] != nil { return false }
             return rememberedPeerID == nil || rememberedPeerID == name

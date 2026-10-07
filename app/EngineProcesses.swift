@@ -143,7 +143,10 @@ extension SharpModel {
         if let logURL { try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true) }
         pipe.fileHandleForReading.readabilityHandler = { [weak self, weak process] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            // Empty data means the helper closed its output. Keeping the
+            // handler would make it fire nonstop and spin a core forever.
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            let text = String(decoding: data, as: UTF8.self)
             if let logURL, let file = try? FileHandle(forWritingTo: logURL) {
                 file.seekToEndOfFile(); file.write(data); file.closeFile()
             } else if let logURL { try? data.write(to: logURL) }
