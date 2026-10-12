@@ -42,10 +42,61 @@ enum SharpResolution: String, CaseIterable, Identifiable, Codable {
 
     func isSupported(for target: SharpDisplaySize) -> Bool {
         let size = size(for: target)
-        // Hardware H.264 encoders stop at 4096 pixels wide; wider streams fall
-        // back to software encoding and become unusable during motion.
-        return size.0 <= 4096 && size.1 <= 8192 &&
-            ((size.0 + 63) / 64) * ((size.1 + 63) / 64) <= 4096
+        if size.0 < 2 || size.1 < 2 || size.0 > 8192 || size.1 > 8192 {
+            return false
+        }
+        if ((size.0 + 63) / 64) * ((size.1 + 63) / 64) > 4096 {
+            return false
+        }
+        let encoded = encodeSize(for: target)
+        return Self.h264PictureFits(encoded.0, encoded.1)
+    }
+
+    func usesRetina(for target: SharpDisplaySize) -> Bool {
+        let size = size(for: target)
+        return size.0 == target.width && size.1 == target.height &&
+            size.0 % 2 == 0 && size.1 % 2 == 0 &&
+            size.0 / 2 >= 1600 && size.1 / 2 >= 900
+    }
+
+    func encodeSize(for target: SharpDisplaySize) -> (Int, Int) {
+        let stream = size(for: target)
+        return Self.h264PictureSize(stream.0, stream.1)
+    }
+
+    // Hardware H.264 High Level 5.2. Same integers as sharp_h264_picture_size.
+    private static func h264PictureFits(_ width: Int, _ height: Int) -> Bool {
+        width % 2 == 0 && height % 2 == 0 && width <= 4096 && height <= 4096 &&
+            ((width + 15) / 16) * ((height + 15) / 16) <= 36864
+    }
+
+    private static func h264PictureSize(_ sourceWidth: Int, _ sourceHeight: Int) -> (Int, Int) {
+        func atLeast2Even(_ value: Int) -> Int {
+            if value < 2 { return 2 }
+            return value % 2 == 0 ? value : value - 1
+        }
+        func even(_ value: Int) -> Int {
+            value % 2 == 0 ? value : value - 1
+        }
+        var width = atLeast2Even(sourceWidth)
+        var height = atLeast2Even(sourceHeight)
+        let originalWidth = width
+        let originalHeight = height
+        if width > 4096 {
+            height = height * 4096 / width
+            width = 4096
+        }
+        if height > 4096 {
+            width = width * 4096 / height
+            height = 4096
+        }
+        width = even(width)
+        height = even(height)
+        while !h264PictureFits(width, height) && width > 2 && height > 2 {
+            width -= 2
+            height = even(originalHeight * width / originalWidth)
+        }
+        return (width, height)
     }
 
     func size(for target: SharpDisplaySize) -> (Int, Int) {

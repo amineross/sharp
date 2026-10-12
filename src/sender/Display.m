@@ -218,8 +218,14 @@ id sharp_create_virtual_display(uint32_t width,
                        forKey:@"name"];
         [descriptor setValue:@(width) forKey:@"maxPixelsWide"];
         [descriptor setValue:@(height) forKey:@"maxPixelsHigh"];
-        double millimetersWide = (double)width * 25.4 / 110.0;
-        double millimetersHigh = (double)height * 25.4 / 110.0;
+        int hiDPI = env_flag_enabled("SHARP_VDISPLAY_HIDPI") &&
+                    (width % 2u) == 0u && (height % 2u) == 0u;
+        /* HiDPI mode is the point size. maxPixels stays the framebuffer. */
+        unsigned int modeWidth = hiDPI ? width / 2u : width;
+        unsigned int modeHeight = hiDPI ? height / 2u : height;
+        double ppi = hiDPI ? 218.0 : 110.0;
+        double millimetersWide = (double)width * 25.4 / ppi;
+        double millimetersHigh = (double)height * 25.4 / ppi;
         [descriptor setValue:[NSValue valueWithSize:NSMakeSize(
                                                         millimetersWide,
                                                         millimetersHigh)]
@@ -250,9 +256,9 @@ id sharp_create_virtual_display(uint32_t width,
         typedef id (*sharp_mode_init_fn)(id, SEL, unsigned int, unsigned int,
                                          double);
         id mode = ((sharp_mode_init_fn)objc_msgSend)(
-            [modeClass alloc], modeInit, width, height, refreshRate);
+            [modeClass alloc], modeInit, modeWidth, modeHeight, refreshRate);
         id settings = [[settingsClass alloc] init];
-        [settings setValue:@0 forKey:@"hiDPI"];
+        [settings setValue:@(hiDPI ? 1 : 0) forKey:@"hiDPI"];
         if ([settings respondsToSelector:NSSelectorFromString(@"setRotation:")]) {
             [settings setValue:@0 forKey:@"rotation"];
         }
@@ -338,8 +344,12 @@ int sharp_select_display_mode(CGDirectDisplayID displayID,
     /*
      * Above roughly 3200x1800, macOS brings a new virtual display up in a
      * 1920x1080 mode even when the requested mode is its only native one.
-     * Select the 1x mode explicitly; ForAppOnly reverts it when we exit.
+     * Select the requested mode explicitly; ForAppOnly reverts it on exit.
+     * HiDPI wants points at half the pixel size, not the 1x mode.
      */
+    int hiDPI = env_flag_enabled("SHARP_VDISPLAY_HIDPI");
+    size_t pointWidth = hiDPI ? width / 2u : width;
+    size_t pointHeight = hiDPI ? height / 2u : height;
     NSDictionary *options = @{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES};
     CFArrayRef modes = CGDisplayCopyAllDisplayModes(displayID, (__bridge CFDictionaryRef)options);
     if (modes == NULL) {
@@ -348,7 +358,8 @@ int sharp_select_display_mode(CGDirectDisplayID displayID,
     CGDisplayModeRef match = NULL;
     for (CFIndex i = 0; i < CFArrayGetCount(modes); i++) {
         CGDisplayModeRef mode = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
-        if (CGDisplayModeGetWidth(mode) == width && CGDisplayModeGetHeight(mode) == height &&
+        if (CGDisplayModeGetWidth(mode) == pointWidth &&
+            CGDisplayModeGetHeight(mode) == pointHeight &&
             CGDisplayModeGetPixelWidth(mode) == width &&
             CGDisplayModeGetPixelHeight(mode) == height) {
             match = mode;

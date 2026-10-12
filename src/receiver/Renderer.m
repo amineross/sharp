@@ -423,12 +423,24 @@
         _textureHeight == 0 || slot->texture_name == 0) {
         return;
     }
-    float x0 = ((float)layer->header.x / (float)_textureWidth) * 2.0f - 1.0f;
-    float x1 = ((float)(layer->header.x + layer->header.w) /
-                (float)_textureWidth) * 2.0f - 1.0f;
-    float y0 = 1.0f - ((float)layer->header.y / (float)_textureHeight) * 2.0f;
-    float y1 = 1.0f - ((float)(layer->header.y + layer->header.h) /
-                       (float)_textureHeight) * 2.0f;
+    uint32_t quadX = layer->header.x;
+    uint32_t quadY = layer->header.y;
+    uint32_t quadW = layer->header.w;
+    uint32_t quadH = layer->header.h;
+    /* The full-frame H.264 picture can be smaller than the stream. Stretch
+     * only that layer; motion lanes keep their header rect. */
+    if (layer->header.region_id == SHARP_H264_FULLFRAME_ID &&
+        layer->header.x == 0 && layer->header.y == 0 &&
+        (layer->header.w != _textureWidth || layer->header.h != _textureHeight)) {
+        quadX = 0;
+        quadY = 0;
+        quadW = _textureWidth;
+        quadH = _textureHeight;
+    }
+    float x0 = ((float)quadX / (float)_textureWidth) * 2.0f - 1.0f;
+    float x1 = ((float)(quadX + quadW) / (float)_textureWidth) * 2.0f - 1.0f;
+    float y0 = 1.0f - ((float)quadY / (float)_textureHeight) * 2.0f;
+    float y1 = 1.0f - ((float)(quadY + quadH) / (float)_textureHeight) * 2.0f;
     GLfloat ll[2] = {0.0f, 1.0f};
     GLfloat lr[2] = {1.0f, 1.0f};
     GLfloat ul[2] = {0.0f, 0.0f};

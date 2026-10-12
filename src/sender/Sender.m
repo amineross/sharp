@@ -39,6 +39,7 @@ int main(int argc, char **argv) {
     int virtualMirrorRequested = env_flag_enabled("SHARP_MIRROR_VDISPLAY");
     int virtualDisplayProbeRequested =
         env_flag_enabled("SHARP_VDISPLAY_PROBE");
+    int virtualDisplayHiDPI = env_flag_enabled("SHARP_VDISPLAY_HIDPI");
     int virtualDisplayCreation = 0;
     CGDirectDisplayID virtualDisplayProbeId = 0;
     if (virtualDisplayProbeRequested && virtualDisplayApi) {
@@ -129,9 +130,15 @@ int main(int argc, char **argv) {
                 if (display != nil) {
                     lastDiscoveredWidth = display.width;
                     lastDiscoveredHeight = display.height;
-                    if (requestedDisplayID == 0u ||
-                        (lastDiscoveredWidth == config.width &&
-                         lastDiscoveredHeight == config.height)) {
+                    BOOL matchesPixels = lastDiscoveredWidth == config.width &&
+                                         lastDiscoveredHeight == config.height;
+                    /* Some systems report the HiDPI point size, exactly half. */
+                    BOOL matchesPoints =
+                        virtualDisplayHiDPI && (config.width % 2u) == 0u &&
+                        (config.height % 2u) == 0u &&
+                        lastDiscoveredWidth == config.width / 2u &&
+                        lastDiscoveredHeight == config.height / 2u;
+                    if (requestedDisplayID == 0u || matchesPixels || matchesPoints) {
                         break;
                     }
                     display = nil;
