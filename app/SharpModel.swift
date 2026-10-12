@@ -452,7 +452,10 @@ final class SharpModel: ObservableObject {
                               detail: "Turn on Sharp in System Settings › Privacy & Security › Local Network"))
         }
         if role == .sender {
-            let size = selectedStreamSize
+            // Probe the size VideoToolbox really gets, not the 5K stream:
+            // no hardware H.264 accepts 5120×2880, but the sender scales
+            // the full-frame video down first.
+            let size = SharpResolution.motionEncodeSize(selectedStreamSize.0, selectedStreamSize.1)
             let encoder = h264HardwareEncoderAvailable(width: size.0, height: size.1)
             next.append(.init(id: "h264", level: encoder ? .pass : .warning,
                               title: "H.264 hardware", detail: encoder ? "Hardware encode is available at \(size.0)×\(size.1)" : "No hardware encoder reported at \(size.0)×\(size.1); motion may be slow"))
