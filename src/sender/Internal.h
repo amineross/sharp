@@ -164,6 +164,9 @@ typedef struct screen_tx_tile {
     uint16_t tile_id;
     uint8_t kind;
     sharp_tile_rect_t rect;
+    /* Capture that owns these pixels when it differs from the job frame
+     * (verified hybrid labels tiles with their source version); 0 = job. */
+    uint32_t generation;
     uint8_t bgra[SHARP_TILE_BYTES];
 } screen_tx_tile_t;
 
@@ -297,6 +300,16 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     BOOL _verifiedReady, _verifiedWantVideo, _verifiedExitPending;
     uint32_t _verifiedDropStaticMaps, _verifiedLastDumpFrame;
     uint32_t _verifiedTargetFrame;
+    /* Progressive exit repair: tiles touched while video was active, sent
+     * center-out in acknowledged batches when video ends. */
+    sharp_hybrid_dirty_t _verifiedDirty;
+    uint16_t _verifiedRepairOrder[SHARP_HYBRID_MAX_TILES];
+    uint8_t _verifiedRepairQueued[SHARP_HYBRID_MAX_TILES / 8u];
+    uint32_t _verifiedRepairCount, _verifiedRepairPos, _verifiedRepairBatchStart;
+    uint32_t _verifiedRepairBatchTiles, _verifiedRepairBackgroundTiles;
+    uint32_t _verifiedRepairBatches, _verifiedRepairTilesSent;
+    uint64_t _verifiedRepairBatchNs, _verifiedRepairBatchTimeoutNs, _verifiedRepairStartNs;
+    BOOL _verifiedProgressiveRepair;
     dispatch_source_t _verifiedTimer;
     uint64_t _captureIdleSinceNs;
     uint64_t _motionPrerollDeadlineNs;
@@ -1003,6 +1016,9 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
 - (void)submitVerifiedVideo:(CVPixelBufferRef)pixels;
 - (void)processVerifiedPixels:(CVPixelBufferRef)pixels now:(uint64_t)now;
 - (void)verifiedMaintenance;
+- (void)beginVerifiedRepairAt:(uint64_t)now;
+- (void)abortVerifiedRepair;
+- (uint16_t)selectVerifiedRepairBatch:(uint16_t *)selected now:(uint64_t)now;
 @end
 
 @interface SharpScreenSender (Metrics)
@@ -1034,6 +1050,8 @@ void h264_snap_large_envelope(sharp_m2_region_t *region,
 int32_t h264_target_bitrate(uint32_t width, uint32_t height,
                                    uint32_t fps);
 int env_flag_enabled(const char *name);
+int env_flag_default_on(const char *name);
+long env_long_or_default(const char *name, long fallback, long min, long max);
 int env_flag_disabled(const char *name);
 uint8_t sharp_fec_group_count(uint16_t chunk_count);
 uint8_t sharp_fec_group_for_chunk(uint16_t chunk_id,

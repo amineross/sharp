@@ -195,6 +195,23 @@ int env_flag_enabled(const char *name) {
     return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
 }
 
+int env_flag_default_on(const char *name) {
+    return !env_flag_disabled(name);
+}
+
+long env_long_or_default(const char *name, long fallback, long min, long max) {
+    const char *value = getenv(name);
+    if (value == NULL || value[0] == '\0') {
+        return fallback;
+    }
+    char *end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (end == value || parsed < min || parsed > max) {
+        return fallback;
+    }
+    return parsed;
+}
+
 int env_flag_disabled(const char *name) {
     const char *value = getenv(name);
     return value != NULL && value[0] != '\0' && strcmp(value, "0") == 0;

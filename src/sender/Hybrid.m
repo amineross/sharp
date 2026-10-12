@@ -29,6 +29,19 @@
     if (!_verifiedSession) _verifiedSession=1;
     if ([self ensureCleanupCapacity:_verifiedSource->total]!=0) exit(1);
     _verifiedDropStaticMaps=(uint32_t)env_double_or_default("SHARP_TEST_HYBRID_DROP_STATIC_MAPS",0);
+    /* Progressive exit repair (SHARP_HYBRID_PROGRESSIVE_REPAIR, default on):
+     * tiles touched by motion are repaired center-out in batches of
+     * SHARP_HYBRID_REPAIR_BATCH_TILES (default 256). The next batch starts once
+     * at most 1/8 of the previous one is unacknowledged, or after
+     * SHARP_HYBRID_REPAIR_BATCH_TIMEOUT_MS (default 150). Meanwhile at most
+     * SHARP_HYBRID_REPAIR_BACKGROUND_TILES (default 32) other tiles per pass
+     * keep the full-screen safety net alive. */
+    _verifiedProgressiveRepair=env_flag_default_on("SHARP_HYBRID_PROGRESSIVE_REPAIR")?YES:NO;
+    _verifiedRepairBatchTiles=(uint32_t)env_long_or_default("SHARP_HYBRID_REPAIR_BATCH_TILES",256,16,SHARP_HYBRID_MAX_TILES);
+    _verifiedRepairBatchTimeoutNs=(uint64_t)env_long_or_default("SHARP_HYBRID_REPAIR_BATCH_TIMEOUT_MS",150,20,5000)*1000000ULL;
+    _verifiedRepairBackgroundTiles=(uint32_t)env_long_or_default("SHARP_HYBRID_REPAIR_BACKGROUND_TILES",32,0,SHARP_HYBRID_MAX_TILES);
+    sharp_hybrid_dirty_reset(&_verifiedDirty);
+    _verifiedRepairCount=0;
     _frameId=1; _fullFrameEnabled=YES;
     /* Fast links start at the Gigabit rate and ramp up on acknowledgements. */
     atomic_store(&_verifiedPacingBps,(uint64_t)(MIN(_pacingMbps,600.0)*1000000.0));
@@ -120,9 +133,12 @@
             _verifiedWantVideo=YES; _verifiedExitPending=NO;
             _fullFrameActive=YES; _fullFrameForceKeyframe=YES;
             _fullFrameEntries++;
+            [self abortVerifiedRepair];
             fprintf(stdout,"verified-hybrid video_enter=1 frame=%u\n",_frameId); fflush(stdout);
         }
     }
+    if (_verifiedWantVideo && _verifiedProgressiveRepair)
+        (void)sharp_hybrid_dirty_mark_frame(&_verifiedDirty,_verifiedSource,_frameId);
     _verifiedTargetFrame=_frameId;
     if (!submittedEarly && _verifiedWantVideo && _verifiedReady) [self submitVerifiedVideo:pixels];
     if (broadChange && !submittedEarly && _verifiedReady && _h264Session)
@@ -171,6 +187,7 @@
         _verifiedTargetFrame=_frameId++;
         _verifiedSource->frame=_verifiedTargetFrame;
         fprintf(stdout,"verified-hybrid exit_pending=1 frame=%u\n",_verifiedTargetFrame); fflush(stdout);
+        [self beginVerifiedRepairAt:now];
     }
     m.kind=SHARP_HYBRID_MAP; m.frame=_verifiedTargetFrame;
     m.flags=_verifiedWantVideo?0:SHARP_HYBRID_STATIC;
@@ -194,7 +211,10 @@
         if(sharp_framebuf_write_ppm(&fb,path)==0) _verifiedLastDumpFrame=_verifiedTargetFrame;
     }
     uint16_t selected[SHARP_HYBRID_MAX_TILES],count=0;
+    BOOL repairing=!_verifiedWantVideo && _verifiedRepairCount>0;
+    if (repairing) count=[self selectVerifiedRepairBatch:selected now:now];
     uint32_t limit=_verifiedWantVideo?128u:m.total;
+    if (repairing) limit=MIN(m.total,(uint32_t)count+_verifiedRepairBackgroundTiles);
     uint32_t outstanding=0,overdue=0;
     for (uint32_t t=0;t<m.total;t++) {
         if (_verifiedAcknowledged[t] && (int32_t)(_verifiedAcknowledged[t]-_verifiedSource->versions[t])>=0) continue;
@@ -215,6 +235,8 @@
         uint32_t t=_verifiedNextTile++%m.total;
         if (_verifiedAcknowledged[t] && (int32_t)(_verifiedAcknowledged[t]-_verifiedSource->versions[t])>=0) continue;
         if (_verifiedWantVideo && now-_verifiedSource->changed_ns[t]<60000000ULL) continue;
+        /* Queued dirty tiles wait for their batch; the scan is the safety net. */
+        if (repairing && (_verifiedRepairQueued[t>>3]>>(t&7)&1u)) continue;
         if (_verifiedAttemptVersion[t]==_verifiedSource->versions[t] &&
             _verifiedAttemptNs[t] && now-_verifiedAttemptNs[t]<120000000ULL) continue;
         selected[count++]=(uint16_t)t;
@@ -227,6 +249,12 @@
     for (uint16_t i=0;i<count;i++) {
         uint16_t t=selected[i]; screen_tx_tile_t *tile=&job->tiles[i];
         tile->tile_id=t; tile->kind=SCREEN_TX_TILE_REFINEMENT;
+        /* The source pixels are unchanged since versions[t], so that capture
+         * owns them. Labelling with it (not the newer job frame) lets the
+         * receiver publish the tile over the last VIDEO manifest, i.e.
+         * progressively during an exit, not only once the STATIC map is
+         * fully matched. Same wire format, same ACK semantics. */
+        tile->generation=_verifiedSource->versions[t];
         sharp_tile_rect_for_id(_width,_height,t,&tile->rect);
         for(uint32_t y=0;y<tile->rect.h;y++)
             memcpy(tile->bgra+(size_t)y*tile->rect.w*4u,
@@ -237,5 +265,82 @@
         _verifiedAttemptVersion[t]=_verifiedSource->versions[t];
     }
     [self enqueueTxFrameJob:job];
+}
+
+- (void)beginVerifiedRepairAt:(uint64_t)now {
+    _verifiedRepairCount=0;
+    if (!_verifiedProgressiveRepair) return;
+    /* Only tiles still stale at the receiver: the background scan refines
+     * tiles that went static while video kept running (e.g. the entry
+     * frame's full repaint), so those must not be repaired again. */
+    uint32_t pruned=sharp_hybrid_dirty_prune_acked(&_verifiedDirty,_verifiedSource,
+                                                   _verifiedAcknowledged);
+    uint32_t n=sharp_hybrid_repair_order(&_verifiedDirty,(uint16_t)_width,(uint16_t)_height,
+                                         _verifiedRepairOrder);
+    sharp_hybrid_dirty_reset(&_verifiedDirty);
+    memset(_verifiedRepairQueued,0,sizeof(_verifiedRepairQueued));
+    for (uint32_t i=0;i<n;i++) {
+        uint16_t t=_verifiedRepairOrder[i];
+        _verifiedRepairQueued[t>>3]|=(uint8_t)(1u<<(t&7));
+    }
+    _verifiedRepairCount=n; _verifiedRepairPos=0; _verifiedRepairBatchStart=0;
+    _verifiedRepairBatchNs=0; _verifiedRepairStartNs=now;
+    _verifiedRepairBatches=0; _verifiedRepairTilesSent=0;
+    fprintf(stdout,"verified-hybrid repair_start=1 dirty_tiles=%u pruned_acked=%u batch_tiles=%u\n",
+            n,pruned,_verifiedRepairBatchTiles); fflush(stdout);
+}
+
+/* Video resumed mid-repair: tiles not yet acknowledged go back into the
+ * dirty set so the next exit still repairs them first. */
+- (void)abortVerifiedRepair {
+    if (!_verifiedRepairCount) return;
+    uint32_t cols=sharp_tile_cols((uint16_t)_width);
+    for (uint32_t i=_verifiedRepairBatchStart;i<_verifiedRepairCount;i++) {
+        uint16_t t=_verifiedRepairOrder[i];
+        if (_verifiedAcknowledged[t] &&
+            (int32_t)(_verifiedAcknowledged[t]-_verifiedSource->versions[t])>=0) continue;
+        (void)sharp_hybrid_dirty_mark(&_verifiedDirty,t,cols);
+    }
+    fprintf(stdout,"verified-hybrid repair_abort=1 sent=%u of=%u batches=%u\n",
+            _verifiedRepairTilesSent,_verifiedRepairCount,_verifiedRepairBatches); fflush(stdout);
+    _verifiedRepairCount=0;
+    memset(_verifiedRepairQueued,0,sizeof(_verifiedRepairQueued));
+}
+
+- (uint16_t)selectVerifiedRepairBatch:(uint16_t *)selected now:(uint64_t)now {
+    uint32_t sent=_verifiedRepairPos-_verifiedRepairBatchStart,pending=0;
+    for (uint32_t i=_verifiedRepairBatchStart;i<_verifiedRepairPos;i++) {
+        uint16_t t=_verifiedRepairOrder[i];
+        if (!_verifiedAcknowledged[t] ||
+            (int32_t)(_verifiedAcknowledged[t]-_verifiedSource->versions[t])<0) pending++;
+    }
+    /* Per-batch acknowledgement gates the next batch; stragglers are
+     * retransmitted by the regular scan once their batch is released. */
+    BOOL released=_verifiedRepairBatchNs==0 || pending*8u<=sent ||
+                  now-_verifiedRepairBatchNs>=_verifiedRepairBatchTimeoutNs;
+    if (!released) return 0;
+    if (_verifiedRepairPos>=_verifiedRepairCount) {
+        fprintf(stdout,"verified-hybrid repair_done=1 tiles=%u sent=%u batches=%u pending=%u ms=%.3f\n",
+                _verifiedRepairCount,_verifiedRepairTilesSent,_verifiedRepairBatches,pending,
+                (now-_verifiedRepairStartNs)/1e6); fflush(stdout);
+        _verifiedRepairCount=0;
+        memset(_verifiedRepairQueued,0,sizeof(_verifiedRepairQueued));
+        return 0;
+    }
+    uint16_t count=0;
+    _verifiedRepairBatchStart=_verifiedRepairPos;
+    while (_verifiedRepairPos<_verifiedRepairCount && count<_verifiedRepairBatchTiles) {
+        uint16_t t=_verifiedRepairOrder[_verifiedRepairPos++];
+        _verifiedRepairQueued[t>>3]&=(uint8_t)~(1u<<(t&7));
+        if (_verifiedAcknowledged[t] &&
+            (int32_t)(_verifiedAcknowledged[t]-_verifiedSource->versions[t])>=0) continue;
+        selected[count++]=t;
+        /* Mark the attempt now so the safety-net scan in this same pass
+         * does not select the tile a second time. */
+        if (_verifiedAttemptVersion[t]!=_verifiedSource->versions[t]) _verifiedFirstAttemptNs[t]=now;
+        _verifiedAttemptNs[t]=now; _verifiedAttemptVersion[t]=_verifiedSource->versions[t];
+    }
+    _verifiedRepairBatchNs=now; _verifiedRepairBatches++; _verifiedRepairTilesSent+=count;
+    return count;
 }
 @end
