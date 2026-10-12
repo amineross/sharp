@@ -285,6 +285,7 @@
             _liveStatsLastFreshPresents = _freshContentPresents;
             _liveStatsLastCursorPackets = cursorPackets;
             _liveStatsLastCursorPresents = cursorPresents;
+            _liveStatsLastVideoFrames = _h264Frames;
         } else if (presentNs > _liveStatsLastNs + 1000000000ULL) {
             double liveSeconds =
                 (double)(presentNs - _liveStatsLastNs) / 1000000000.0;
@@ -297,18 +298,24 @@
             double cursorPresentFps =
                 (double)(cursorPresents - _liveStatsLastCursorPresents) /
                 liveSeconds;
+            /* Decoded video frames, independent of content-serial changes:
+             * fresh_fps=0 with video_decoded_fps>0 is a present/serial
+             * problem; both 0 means no video reached the receiver. */
+            double videoDecodedFps =
+                (double)(_h264Frames - _liveStatsLastVideoFrames) / liveSeconds;
             fprintf(stdout,
-                    "m1-display-live receiver_fresh_fps=%.2f "
+                    "m1-display-live receiver_fresh_fps=%.2f video_decoded_fps=%.2f "
                     "cursor_rx_fps=%.2f cursor_present_fps=%.2f "
                     "cursor_seq=%u motion_mask_active_tiles=%" PRIu64 " verified_sharp_tiles=%" PRIu64
                     " verified_missing_maps=%" PRIu64 "\n",
-                    freshFps, cursorRxFps, cursorPresentFps,
+                    freshFps, videoDecodedFps, cursorRxFps, cursorPresentFps,
                     cursorSnapshot.seq, motionMaskActiveTiles, _verifiedSharpTiles, _verifiedMissingMaps);
             fflush(stdout);
             _liveStatsLastNs = presentNs;
             _liveStatsLastFreshPresents = _freshContentPresents;
             _liveStatsLastCursorPackets = cursorPackets;
             _liveStatsLastCursorPresents = cursorPresents;
+            _liveStatsLastVideoFrames = _h264Frames;
         }
         if (_frameLog != NULL) {
             fprintf(_frameLog, "%u\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64

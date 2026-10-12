@@ -376,6 +376,7 @@ typedef struct sharp_h264_region_stats {
     uint64_t _liveStatsLastFreshPresents;
     uint64_t _liveStatsLastCursorPackets;
     uint64_t _liveStatsLastCursorPresents;
+    uint64_t _liveStatsLastVideoFrames;
     uint8_t _pendingMotionMask[SHARP_MOTION_MASK_MAX_BYTES];
     uint8_t _desiredMotionMask[SHARP_MOTION_MASK_MAX_BYTES];
     uint8_t _activeMotionMask[SHARP_MOTION_MASK_MAX_BYTES];

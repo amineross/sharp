@@ -357,7 +357,6 @@ void h264_output_callback(void *outputCallbackRefCon,
                                  void *sourceFrameRefCon, OSStatus status,
                                  VTEncodeInfoFlags infoFlags,
                                  CMSampleBufferRef sampleBuffer) {
-    (void)infoFlags;
     SharpScreenSender *sender = (__bridge SharpScreenSender *)outputCallbackRefCon;
     h264_sample_context_t *context = (h264_sample_context_t *)sourceFrameRefCon;
     if (context != NULL) {
@@ -388,6 +387,14 @@ void h264_output_callback(void *outputCallbackRefCon,
             sender.fullFrameEncodeInFlight--;
         }
         sender.h264EncodeFailures++;
+        /* Tell encoder drops (no output, status OK) apart from errors. A
+         * dropped frame still fires this callback, so callback latency alone
+         * cannot show that video stopped. */
+        if (status == noErr && (infoFlags & kVTEncodeInfo_FrameDropped)) {
+            sender.vtDroppedFrames++;
+        } else {
+            sender.vtCallbackErrors++;
+        }
         if (context != NULL) {
             if (context->retained_pixel_buffer != NULL) {
                 CVPixelBufferRelease(context->retained_pixel_buffer);
