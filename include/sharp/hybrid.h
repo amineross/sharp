@@ -66,4 +66,14 @@ void sharp_hybrid_source_destroy(sharp_hybrid_source_t *s);
 uint32_t sharp_hybrid_source_update(sharp_hybrid_source_t *s, const uint8_t *pixels,
                                   uint32_t stride, uint32_t frame, uint64_t now,
                                   uint32_t *repeated);
+/* A scene change is at least one eighth of the tiles, and at least 8.
+ * A caret or a clock is smaller and stays on lossless tiles. */
+int sharp_hybrid_scene_change(uint32_t changed, uint32_t total);
+/* Sustained local motion: at least min_tiles tiles that changed on three or
+ * more consecutive captures (0 selects SHARP_HYBRID_REPEAT_TILES_DEFAULT).
+ * A blinking caret or a typed word touches one or two tiles and stays on
+ * lossless tiles; a video playing in a window (480x270 covers about 40
+ * tiles of 64 px) switches to video. */
+#define SHARP_HYBRID_REPEAT_TILES_DEFAULT 8u
+int sharp_hybrid_repeated_motion(uint32_t repeated, uint32_t min_tiles);
 #endif

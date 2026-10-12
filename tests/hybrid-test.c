@@ -136,4 +136,22 @@ static void test_encode_once_batch_fallback(void) {
     }
     sharp_tile_receiver_destroy(&tiles);close(listener);close(sender);
 }
-int main(void) {test_maps();test_content_proof();test_tile_capture_label();test_encode_once_batch_fallback();puts("hybrid-test PASS");return 0;}
+static void test_scene_change(void) {
+    /* Caret on a 3200x1800 grid: 1450 tiles, threshold 181. */
+    assert(sharp_hybrid_scene_change(2,1450)==0);
+    assert(sharp_hybrid_scene_change(181,1450)==1);
+    assert(sharp_hybrid_scene_change(180,1450)==0);
+    assert(sharp_hybrid_scene_change(8,16)==1);
+    assert(sharp_hybrid_scene_change(7,16)==0);
+    assert(sharp_hybrid_scene_change(0,0)==0);
+    /* Repeated-change trigger: a caret (1-2 tiles) stays on tiles, a
+     * 480x270 windowed video (~40 tiles) enters video. */
+    assert(sharp_hybrid_repeated_motion(1,0)==0);
+    assert(sharp_hybrid_repeated_motion(2,0)==0);
+    assert(sharp_hybrid_repeated_motion(7,0)==0);
+    assert(sharp_hybrid_repeated_motion(8,0)==1);
+    assert(sharp_hybrid_repeated_motion(40,0)==1);
+    assert(sharp_hybrid_repeated_motion(3,4)==0);
+    assert(sharp_hybrid_repeated_motion(4,4)==1);
+}
+int main(void) {test_maps();test_content_proof();test_tile_capture_label();test_encode_once_batch_fallback();test_scene_change();puts("hybrid-test PASS");return 0;}

@@ -109,8 +109,12 @@
     CVPixelBufferUnlockBaseAddress(pixels,kCVPixelBufferLock_ReadOnly);
     if (env_flag_enabled("SHARP_HYBRID_TRACE") && changed>=_verifiedSource->total/8)
         fprintf(stdout,"hybrid-change frame=%u tiles=%u now_ns=%llu\n",_frameId,changed,now);
-    BOOL broadChange=changed>=MAX(8u,_verifiedSource->total/8u);
-    if (repeated>=2 || broadChange) {
+    BOOL broadChange=sharp_hybrid_scene_change(changed,_verifiedSource->total);
+    /* Local motion that repeats over consecutive captures (a video in a
+     * window) also enters video, but only when enough tiles repeat: a caret
+     * touches one or two tiles and stays lossless. */
+    BOOL repeatedMotion=sharp_hybrid_repeated_motion(repeated,0);
+    if (repeatedMotion || broadChange) {
         _verifiedLastMotionNs=now;
         if (!_verifiedWantVideo) {
             _verifiedWantVideo=YES; _verifiedExitPending=NO;
@@ -127,7 +131,7 @@
     _stats.frames++; _sentFrames++;
     if (!_firstFrameNs) _firstFrameNs=now;
     _lastFrameNs=now;
-    if (repeated>=2 || broadChange) _verifiedLastMotionNs=shtp_now_ns();
+    if (repeatedMotion || broadChange) _verifiedLastMotionNs=shtp_now_ns();
     [self verifiedMaintenance];
     _frameId++;
 }

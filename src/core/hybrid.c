@@ -140,3 +140,13 @@ uint32_t sharp_hybrid_source_update(sharp_hybrid_source_t *s,const uint8_t *pixe
     }
     s->frame=frame;return changed;
 }
+int sharp_hybrid_scene_change(uint32_t changed,uint32_t total) {
+    if (!total) return 0;
+    uint32_t need=total/8u;
+    if (need<8u) need=8u;
+    return changed>=need;
+}
+int sharp_hybrid_repeated_motion(uint32_t repeated,uint32_t min_tiles) {
+    uint32_t need=min_tiles?min_tiles:SHARP_HYBRID_REPEAT_TILES_DEFAULT;
+    return repeated>=need;
+}
