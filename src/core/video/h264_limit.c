@@ -50,3 +50,21 @@ void sharp_h264_picture_size(uint32_t width, uint32_t height,
     *out_width = width;
     *out_height = height;
 }
+
+void sharp_h264_motion_picture_size(uint32_t width, uint32_t height,
+                                    uint32_t max_width, uint32_t *out_width,
+                                    uint32_t *out_height) {
+    width = even_at_least_2(width);
+    height = even_at_least_2(height);
+    /* Only sources wider than the hardware picture limit are capped: a 4K or
+     * smaller stream already encodes at its own size on current Macs. */
+    if (max_width != 0u && width > SHARP_H264_MOTION_CAP_ABOVE_WIDTH) {
+        max_width = even_at_least_2(max_width);
+        if (width > max_width) {
+            height = (uint32_t)(((uint64_t)height * max_width) / width);
+            height = even_at_least_2(height);
+            width = max_width;
+        }
+    }
+    sharp_h264_picture_size(width, height, out_width, out_height);
+}

@@ -172,13 +172,26 @@
             _vtSpeedPriorityActive = YES;
         }
     }
-    int32_t maxFrameDelay = 1;
-    CFNumberRef maxFrameDelayNumber =
-        CFNumberCreate(NULL, kCFNumberSInt32Type, &maxFrameDelay);
-    if (maxFrameDelayNumber != NULL) {
-        if (VTSessionSetProperty(slot->session,
-                                 kVTCompressionPropertyKey_MaxFrameDelayCount,
-                                 maxFrameDelayNumber) == noErr) {
+    /* Default 1. A bound of 0 is accepted by the hardware H.264 encoder
+     * but makes it drop frames (callback with kVTEncodeInfo_FrameDropped and
+     * no data): the 5K benchmark showed sub-millisecond callbacks and zero
+     * H.264 frames sent. SHARP_VT_MAX_FRAME_DELAY=0 keeps it testable. */
+    int32_t delayCandidates[2] = {
+        (int32_t)env_long_or_default("SHARP_VT_MAX_FRAME_DELAY", 1, 0, 8), 1};
+    BOOL frameDelaySet = NO;
+    for (int d = 0; d < 2 && !frameDelaySet; d++) {
+        int32_t maxFrameDelay = delayCandidates[d];
+        CFNumberRef maxFrameDelayNumber =
+            CFNumberCreate(NULL, kCFNumberSInt32Type, &maxFrameDelay);
+        if (maxFrameDelayNumber == NULL) {
+            break;
+        }
+        OSStatus delayStatus = VTSessionSetProperty(
+            slot->session, kVTCompressionPropertyKey_MaxFrameDelayCount,
+            maxFrameDelayNumber);
+        _vtFrameDelayStatus = (int32_t)delayStatus;
+        if (delayStatus == noErr) {
+            frameDelaySet = YES;
             _vtFrameDelayBounded = YES;
         }
         CFRelease(maxFrameDelayNumber);
@@ -766,14 +779,36 @@
     }
     _fullFrameTraceKeyframeAttempted =
         _fullFrameTraceKeyframeAttempted || forceKeyframe;
-    if (_fullFrameEncodeInFlight >= 2u && !forceKeyframe) {
+    static uint32_t maxInFlight = 0;
+    static dispatch_once_t maxInFlightOnce;
+    dispatch_once(&maxInFlightOnce, ^{
+        /* SHARP_VT_MAX_IN_FLIGHT: full-frame encodes queued in VideoToolbox
+         * (default 2, 1..8). The 5K benchmark showed 3 in flight pushed
+         * per-frame encode latency from ~55 ms to 74-98 ms. */
+        maxInFlight = (uint32_t)env_long_or_default("SHARP_VT_MAX_IN_FLIGHT",
+                                                    2, 1, 8);
+    });
+    if (_fullFrameEncodeInFlight >= maxInFlight && !forceKeyframe) {
         _fullFrameSendDrops++;
         return NO;
     }
     [self maybeRampFullFrameBitrate];
     uint32_t encW = 0;
     uint32_t encH = 0;
-    sharp_h264_picture_size(_width, _height, &encW, &encH);
+    static uint32_t motionMaxWidth = 0;
+    static dispatch_once_t motionMaxWidthOnce;
+    dispatch_once(&motionMaxWidthOnce, ^{
+        /* SHARP_VT_MOTION_MAX_WIDTH: cap on the full-frame video width
+         * for sources wider than 4096 (default 2560; 0 = only the H.264
+         * level limit). 4K and smaller streams are not capped. The M1 takes
+         * 50-150 ms per ~4096-wide frame; the receiver stretches the
+         * picture and lossless tiles restore native pixels at rest. */
+        motionMaxWidth = (uint32_t)env_long_or_default(
+            "SHARP_VT_MOTION_MAX_WIDTH",
+            (long)SHARP_H264_MOTION_MAX_WIDTH_DEFAULT, 0, 8192);
+    });
+    sharp_h264_motion_picture_size(_width, _height, motionMaxWidth, &encW,
+                                   &encH);
     BOOL scaleToEncode = encW != _width || encH != _height;
     VTCompressionSessionRef session =
         [self ensureH264EncoderForRegion:SHARP_H264_FULLFRAME_ID

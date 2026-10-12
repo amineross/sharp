@@ -180,6 +180,7 @@
 @synthesize vtLowLatencyFallbacks = _vtLowLatencyFallbacks;
 @synthesize vtSpeedPriorityActive = _vtSpeedPriorityActive;
 @synthesize vtFrameDelayBounded = _vtFrameDelayBounded;
+@synthesize vtFrameDelayStatus = _vtFrameDelayStatus;
 @synthesize vtFastProfileRequested = _vtFastProfileRequested;
 @synthesize vtFastProfileActive = _vtFastProfileActive;
 @synthesize vtReferenceBufferBounded = _vtReferenceBufferBounded;

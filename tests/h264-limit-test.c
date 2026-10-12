@@ -32,6 +32,26 @@ int main(void) {
     sharp_h264_picture_size(0, 0, &out_width, &out_height);
     assert(out_width >= 2u && out_height >= 2u);
     assert(picture_fits(out_width, out_height));
+    sharp_h264_motion_picture_size(5120, 2880, 2560, &out_width, &out_height);
+    assert(out_width == 2560u && out_height == 1440u);
+    sharp_h264_motion_picture_size(5120, 2880, 0, &out_width, &out_height);
+    assert(out_width == 4096u && out_height == 2304u);
+    sharp_h264_motion_picture_size(1920, 1080, 2560, &out_width, &out_height);
+    assert(out_width == 1920u && out_height == 1080u);
+    sharp_h264_motion_picture_size(5120, 2160, 2561, &out_width, &out_height);
+    assert(out_width == 2560u && out_height == 1080u);
+    sharp_h264_motion_picture_size(5120, 2880, 8000, &out_width, &out_height);
+    assert(out_width == 4096u && out_height == 2304u);
+    sharp_h264_motion_picture_size(5121, 2879, 1279, &out_width, &out_height);
+    assert((out_width % 2u) == 0u && (out_height % 2u) == 0u);
+    assert(picture_fits(out_width, out_height) && out_width <= 1278u);
+    /* 4K and smaller sources are never capped. */
+    sharp_h264_motion_picture_size(3840, 2160, 2560, &out_width, &out_height);
+    assert(out_width == 3840u && out_height == 2160u);
+    sharp_h264_motion_picture_size(4096, 2304, 2560, &out_width, &out_height);
+    assert(out_width == 4096u && out_height == 2304u);
+    sharp_h264_motion_picture_size(3200, 1800, 2560, &out_width, &out_height);
+    assert(out_width == 3200u && out_height == 1800u);
     printf("h264 limit PASS\n");
     return 0;
 }
