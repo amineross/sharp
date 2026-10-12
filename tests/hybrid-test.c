@@ -153,6 +153,17 @@ static void test_scene_change(void) {
     assert(sharp_hybrid_repeated_motion(40,0)==1);
     assert(sharp_hybrid_repeated_motion(3,4)==0);
     assert(sharp_hybrid_repeated_motion(4,4)==1);
+    /* 5K: 3600 tiles. Entry needs 450, sustaining needs only 7. */
+    assert(sharp_hybrid_scene_change(60,3600)==0);
+    assert(sharp_hybrid_motion_sustained(60,3600,0)==1);
+    assert(sharp_hybrid_motion_sustained(7,3600,0)==1);
+    assert(sharp_hybrid_motion_sustained(6,3600,0)==0);
+    assert(sharp_hybrid_motion_sustained(3,16,0)==0);
+    assert(sharp_hybrid_motion_sustained(4,16,0)==1);
+    assert(sharp_hybrid_motion_sustained(19,3600,20)==0);
+    assert(sharp_hybrid_motion_sustained(20,3600,20)==1);
+    assert(sharp_hybrid_motion_sustained(0,3600,0)==0);
+    assert(sharp_hybrid_motion_sustained(9,0,0)==0);
 }
 static sharp_hybrid_dirty_t dirty;
 static void test_repair_order(void) {

@@ -29,6 +29,16 @@
     if (!_verifiedSession) _verifiedSession=1;
     if ([self ensureCleanupCapacity:_verifiedSource->total]!=0) exit(1);
     _verifiedDropStaticMaps=(uint32_t)env_double_or_default("SHARP_TEST_HYBRID_DROP_STATIC_MAPS",0);
+    /* Hysteresis: stay in video at least SHARP_HYBRID_MIN_VIDEO_MS (default
+     * 500) and leave only after SHARP_HYBRID_EXIT_QUIET_MS (default 400) with
+     * no motion. Entering needs a broad change (1/8 of the tiles), but once in
+     * video any capture changing SHARP_HYBRID_SUSTAIN_TILES tiles (default
+     * 0 = max(4,total/512)) counts as motion. Previously only broad changes
+     * refreshed the quiet timer, so moving content covering less than 1/8 of
+     * a 5K screen dropped out of video after 150 ms and fell back to tiles.
+     * Each exit costs a tile repair, so short episodes thrash. */
+    _verifiedMinVideoNs=(uint64_t)env_long_or_default("SHARP_HYBRID_MIN_VIDEO_MS",500,0,10000)*1000000ULL;
+    _verifiedExitQuietNs=(uint64_t)env_long_or_default("SHARP_HYBRID_EXIT_QUIET_MS",400,50,10000)*1000000ULL;
     /* Progressive exit repair (SHARP_HYBRID_PROGRESSIVE_REPAIR, default on):
      * tiles touched by motion are repaired center-out in batches of
      * SHARP_HYBRID_REPAIR_BATCH_TILES (default 256). The next batch starts once
@@ -40,6 +50,7 @@
     _verifiedRepairBatchTiles=(uint32_t)env_long_or_default("SHARP_HYBRID_REPAIR_BATCH_TILES",256,16,SHARP_HYBRID_MAX_TILES);
     _verifiedRepairBatchTimeoutNs=(uint64_t)env_long_or_default("SHARP_HYBRID_REPAIR_BATCH_TIMEOUT_MS",150,20,5000)*1000000ULL;
     _verifiedRepairBackgroundTiles=(uint32_t)env_long_or_default("SHARP_HYBRID_REPAIR_BACKGROUND_TILES",32,0,SHARP_HYBRID_MAX_TILES);
+    _verifiedSustainTiles=(uint32_t)env_long_or_default("SHARP_HYBRID_SUSTAIN_TILES",0,0,SHARP_HYBRID_MAX_TILES);
     sharp_hybrid_dirty_reset(&_verifiedDirty);
     _verifiedRepairCount=0;
     _frameId=1; _fullFrameEnabled=YES;
@@ -87,8 +98,14 @@
             if (v && (int32_t)(v-_verifiedAcknowledged[t])>0 &&
                 (int32_t)(_verifiedSource->frame-v)>=0) _verifiedAcknowledged[t]=v;
         }
-        if ((m.flags&SHARP_HYBRID_COMMITTED) && !_verifiedWantVideo &&
-            m.frame==_verifiedTargetFrame && _verifiedExitPending) {
+        /* Every map after exit_pending is STATIC, so a commit of the exit
+         * frame or any later one proves the receiver shows exact pixels.
+         * Requiring the latest target frame meant that each new capture
+         * during the exit moved the goalpost (rects: exit at 216, ack only
+         * at 311, 1.6 s later, though the repair was done in 218 ms). */
+        if ((m.flags&SHARP_HYBRID_COMMITTED) && !_verifiedWantVideo && _verifiedExitPending &&
+            (int32_t)(m.frame-_verifiedExitFrame)>=0 &&
+            (int32_t)(_verifiedTargetFrame-m.frame)>=0) {
             _verifiedExitPending=NO;
             _fullFrameActive=NO;
             _fullFrameExits++;
@@ -131,11 +148,15 @@
         _verifiedLastMotionNs=now;
         if (!_verifiedWantVideo) {
             _verifiedWantVideo=YES; _verifiedExitPending=NO;
+            _verifiedVideoEnterNs=now;
             _fullFrameActive=YES; _fullFrameForceKeyframe=YES;
             _fullFrameEntries++;
             [self abortVerifiedRepair];
             fprintf(stdout,"verified-hybrid video_enter=1 frame=%u\n",_frameId); fflush(stdout);
         }
+    } else if (_verifiedWantVideo &&
+               sharp_hybrid_motion_sustained(changed,_verifiedSource->total,_verifiedSustainTiles)) {
+        _verifiedLastMotionNs=now;
     }
     if (_verifiedWantVideo && _verifiedProgressiveRepair)
         (void)sharp_hybrid_dirty_mark_frame(&_verifiedDirty,_verifiedSource,_frameId);
@@ -179,13 +200,15 @@
         VTCompressionSessionCompleteFrames(_h264Session,CMTimeMake(_verifiedSource->frame,MAX(_fps,1u)));
         _verifiedLastFlushedFrame=_verifiedSource->frame;
     }
-    if (_verifiedWantVideo && now-_verifiedLastMotionNs>=150000000ULL) {
+    if (_verifiedWantVideo && now-_verifiedLastMotionNs>=_verifiedExitQuietNs &&
+        now-_verifiedVideoEnterNs>=_verifiedMinVideoNs) {
         _verifiedWantVideo=NO; _verifiedExitPending=YES;
         _verifiedExitStartNs=now;
         /* A new capture ID makes the immutable STATIC decision distinct from
          * the last VIDEO manifest, even when SCK supplies only idle events. */
         _verifiedTargetFrame=_frameId++;
         _verifiedSource->frame=_verifiedTargetFrame;
+        _verifiedExitFrame=_verifiedTargetFrame;
         fprintf(stdout,"verified-hybrid exit_pending=1 frame=%u\n",_verifiedTargetFrame); fflush(stdout);
         [self beginVerifiedRepairAt:now];
     }

@@ -286,6 +286,8 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     CMSampleBufferRef _lastCompleteSampleBuffer;
     sharp_hybrid_source_t *_verifiedSource;
     uint64_t _verifiedSession, _verifiedNonce, _verifiedLastControlNs, _verifiedLastMotionNs;
+    uint64_t _verifiedVideoEnterNs, _verifiedMinVideoNs, _verifiedExitQuietNs;
+    uint32_t _verifiedSustainTiles;
     uint64_t _verifiedHandshakeStartNs, _verifiedExitStartNs;
     uint32_t _verifiedLastCommitLogged, _verifiedLastMapFrame, _verifiedCommittedFrame;
     uint32_t _verifiedAttemptVersion[SHARP_HYBRID_MAX_TILES], _verifiedNextTile;
@@ -299,7 +301,7 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     uint64_t _verifiedAttemptNs[SHARP_HYBRID_MAX_TILES];
     BOOL _verifiedReady, _verifiedWantVideo, _verifiedExitPending;
     uint32_t _verifiedDropStaticMaps, _verifiedLastDumpFrame;
-    uint32_t _verifiedTargetFrame;
+    uint32_t _verifiedTargetFrame, _verifiedExitFrame;
     /* Progressive exit repair: tiles touched while video was active, sent
      * center-out in acknowledged batches when video ends. */
     sharp_hybrid_dirty_t _verifiedDirty;

@@ -153,6 +153,13 @@ int sharp_hybrid_scene_change(uint32_t changed,uint32_t total) {
 int sharp_hybrid_repeated_motion(uint32_t repeated,uint32_t min_tiles) {
     uint32_t need=min_tiles?min_tiles:SHARP_HYBRID_REPEAT_TILES_DEFAULT;
     return repeated>=need;
+}
+int sharp_hybrid_motion_sustained(uint32_t changed,uint32_t total,uint32_t min_tiles) {
+    if (!total || !changed) return 0;
+    uint32_t need=min_tiles?min_tiles:total/512u;
+    if (!min_tiles && need<4u) need=4u;
+    return changed>=need;
+}
 void sharp_hybrid_dirty_reset(sharp_hybrid_dirty_t *d) { memset(d,0,sizeof(*d)); }
 int sharp_hybrid_dirty_test(const sharp_hybrid_dirty_t *d,uint32_t tile) {
     return tile<SHARP_HYBRID_MAX_TILES && (d->bits[tile>>3]>>(tile&7)&1u);

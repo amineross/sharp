@@ -76,6 +76,9 @@ int sharp_hybrid_scene_change(uint32_t changed, uint32_t total);
  * tiles of 64 px) switches to video. */
 #define SHARP_HYBRID_REPEAT_TILES_DEFAULT 8u
 int sharp_hybrid_repeated_motion(uint32_t repeated, uint32_t min_tiles);
+/* Motion that keeps an active video episode alive: at least min_tiles
+ * changed tiles (0 selects max(4, total/512)). Lower than the entry bar. */
+int sharp_hybrid_motion_sustained(uint32_t changed, uint32_t total, uint32_t min_tiles);
 /* Tiles touched by motion while video is active. Exiting video repairs these
  * first, from the motion centroid outward; everything else is already
  * verified. The centroid is accumulated in tile units. */
