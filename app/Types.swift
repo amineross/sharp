@@ -54,8 +54,13 @@ enum SharpResolution: String, CaseIterable, Identifiable, Codable {
 
     func usesRetina(for target: SharpDisplaySize) -> Bool {
         let size = size(for: target)
+        // Only a panel wider or taller than one H.264 picture is dense enough
+        // that 1× points are unreadably small. 3200×1800 and 3840×2160 stay 1×:
+        // halving them makes the desktop look zoomed in, and macOS then publishes
+        // that half size as the clickable display.
         return size.0 == target.width && size.1 == target.height &&
             size.0 % 2 == 0 && size.1 % 2 == 0 &&
+            max(size.0, size.1) > 4096 &&
             size.0 / 2 >= 1600 && size.1 / 2 >= 900
     }
 

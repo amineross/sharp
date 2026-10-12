@@ -208,8 +208,17 @@ id sharp_create_virtual_display(uint32_t width,
         Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
         id descriptor = [[descriptorClass alloc] init];
         uint32_t serial = 0x53000000u ^ (width << 8u) ^ height;
+        int hiDPI = env_flag_enabled("SHARP_VDISPLAY_HIDPI") &&
+                    (width % 2u) == 0u && (height % 2u) == 0u &&
+                    (width > 4096u || height > 4096u);
         [descriptor setValue:@(0x5348u) forKey:@"vendorID"];
-        [descriptor setValue:@(0u) forKey:@"productID"];
+        /*
+         * macOS remembers the last mode per vendor and product, and ignores
+         * the serial number. A new size needs a new product so a previous
+         * half-resolution session cannot come back as this display's mode.
+         */
+        uint32_t productID = (width << 8u) ^ height ^ (hiDPI ? 0x10000u : 0u);
+        [descriptor setValue:@(productID) forKey:@"productID"];
         [descriptor setValue:@(serial) forKey:@"serialNum"];
         if ([descriptor respondsToSelector:NSSelectorFromString(@"setSerialNumber:")]) {
             [descriptor setValue:@(serial) forKey:@"serialNumber"];
@@ -218,11 +227,6 @@ id sharp_create_virtual_display(uint32_t width,
                        forKey:@"name"];
         [descriptor setValue:@(width) forKey:@"maxPixelsWide"];
         [descriptor setValue:@(height) forKey:@"maxPixelsHigh"];
-        int hiDPI = env_flag_enabled("SHARP_VDISPLAY_HIDPI") &&
-                    (width % 2u) == 0u && (height % 2u) == 0u;
-        /* HiDPI mode is the point size. maxPixels stays the framebuffer. */
-        unsigned int modeWidth = hiDPI ? width / 2u : width;
-        unsigned int modeHeight = hiDPI ? height / 2u : height;
         double ppi = hiDPI ? 218.0 : 110.0;
         double millimetersWide = (double)width * 25.4 / ppi;
         double millimetersHigh = (double)height * 25.4 / ppi;
@@ -255,14 +259,39 @@ id sharp_create_virtual_display(uint32_t width,
         SEL modeInit = NSSelectorFromString(@"initWithWidth:height:refreshRate:");
         typedef id (*sharp_mode_init_fn)(id, SEL, unsigned int, unsigned int,
                                          double);
-        id mode = ((sharp_mode_init_fn)objc_msgSend)(
-            [modeClass alloc], modeInit, modeWidth, modeHeight, refreshRate);
+        /*
+         * The first mode is the one WindowServer actually runs. On macOS 26
+         * and later a single half-size mode is published as 1×, so a 3200×1800
+         * request became a 1600×900 desktop stretched to the panel and clicks
+         * missed. HiDPI synthesis needs the framebuffer first, then more modes.
+         */
+        NSMutableArray *modes = [NSMutableArray array];
+        sharp_mode_init_fn initMode = (sharp_mode_init_fn)objc_msgSend;
+        id nativeMode = initMode([modeClass alloc], modeInit, width, height, refreshRate);
+        if (nativeMode != nil) {
+            [modes addObject:nativeMode];
+        }
+        if (hiDPI) {
+            static const unsigned int extras[][2] = {
+                {3840u, 2160u}, {3200u, 1800u}, {2560u, 1440u}, {1920u, 1080u},
+            };
+            for (size_t i = 0; i < sizeof(extras) / sizeof(extras[0]); i++) {
+                if (extras[i][0] >= width || extras[i][1] >= height) {
+                    continue;
+                }
+                id extra = initMode([modeClass alloc], modeInit, extras[i][0],
+                                    extras[i][1], refreshRate);
+                if (extra != nil) {
+                    [modes addObject:extra];
+                }
+            }
+        }
         id settings = [[settingsClass alloc] init];
         [settings setValue:@(hiDPI ? 1 : 0) forKey:@"hiDPI"];
         if ([settings respondsToSelector:NSSelectorFromString(@"setRotation:")]) {
             [settings setValue:@0 forKey:@"rotation"];
         }
-        [settings setValue:@[ mode ] forKey:@"modes"];
+        [settings setValue:modes forKey:@"modes"];
 
         typedef id (*sharp_id_arg_fn)(id, SEL, id);
         id virtualDisplay = ((sharp_id_arg_fn)objc_msgSend)(
