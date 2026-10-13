@@ -477,7 +477,83 @@ int main(int argc, char **argv) {
                 uint64_t liveFrames = sender.fullFrameH264Frames > 0
                                           ? sender.fullFrameH264Frames
                                           : sender.h264Frames;
-                double liveFps = liveSec > 0.0 ? (double)liveFrames / liveSec : 0.0;
+                (void)liveFrames;
+                /* Rolling rates per stats interval. The old cumulative value
+                 * averaged over the whole session (idle time included). */
+                static uint64_t lastStatsNs, lastCallbacks, lastSkipped,
+                    lastReplaced, lastInvalid, lastProcessed, lastSubmitted,
+                    lastInFlightDrops, lastEncoded, lastVtDropped, lastVtErrors,
+                    lastEncodeFailures, lastTxDroppedJobs, lastStatsCount;
+                uint64_t curCallbacks = sender.captureCallbacks;
+                uint64_t curSkipped = sender.skippedFrames;
+                uint64_t curReplaced = sender.replacedFrames;
+                uint64_t curInvalid = sender.invalidFrames;
+                uint64_t curProcessed = sender.sentFrames;
+                uint64_t curSubmitted = sender.fullFrameEncodeSubmissions;
+                uint64_t curInFlightDrops = sender.fullFrameSendDrops;
+                uint64_t curEncoded = sender.h264Frames;
+                uint64_t curVtDropped = sender.vtDroppedFrames;
+                uint64_t curVtErrors = sender.vtCallbackErrors;
+                uint64_t curEncodeFailures = sender.h264EncodeFailures;
+                uint64_t curTxDroppedJobs = sender.txDroppedJobs;
+                double intervalSec =
+                    lastStatsNs != 0 && nowNs > lastStatsNs
+                        ? (double)(nowNs - lastStatsNs) / 1000000000.0
+                        : liveSec;
+                double perSec = intervalSec > 0.0 ? 1.0 / intervalSec : 0.0;
+                double liveFps = (double)(curEncoded - lastEncoded) * perSec;
+                fprintf(stdout,
+                        "m1-screen-pipeline interval_s=%.3f"
+                        " sck_callbacks=%" PRIu64 " status_skipped=%" PRIu64
+                        " replaced=%" PRIu64 " invalid=%" PRIu64
+                        " processed=%" PRIu64 " vt_submitted=%" PRIu64
+                        " inflight_drops=%" PRIu64 " vt_dropped=%" PRIu64
+                        " vt_errors=%" PRIu64 " encode_failures=%" PRIu64
+                        " h264_sent=%" PRIu64 " tx_dropped_jobs=%" PRIu64
+                        " callback_fps=%.2f processed_fps=%.2f"
+                        " h264_sent_fps=%.2f\n",
+                        intervalSec, curCallbacks - lastCallbacks,
+                        curSkipped - lastSkipped, curReplaced - lastReplaced,
+                        curInvalid - lastInvalid, curProcessed - lastProcessed,
+                        curSubmitted - lastSubmitted,
+                        curInFlightDrops - lastInFlightDrops,
+                        curVtDropped - lastVtDropped, curVtErrors - lastVtErrors,
+                        curEncodeFailures - lastEncodeFailures,
+                        curEncoded - lastEncoded,
+                        curTxDroppedJobs - lastTxDroppedJobs,
+                        (double)(curCallbacks - lastCallbacks) * perSec,
+                        (double)(curProcessed - lastProcessed) * perSec,
+                        liveFps);
+                /* The full m1-screen-vt line is otherwise only printed on
+                 * exit, which a benchmark of a live stream never reaches. */
+                if (lastStatsCount++ % 5u == 0u) {
+                    fprintf(stdout,
+                            "m1-screen-vt live=1 low_latency_requested=%u "
+                            "low_latency_active=%u low_latency_fallbacks=%" PRIu64
+                            " speed_priority=%u frame_delay_bounded=%u"
+                            " frame_delay_status=%d hardware=%u"
+                            " nv12_requested=%u nv12_active=%u"
+                            " pixel_transfer_failures=%" PRIu64
+                            " vt_dropped=%" PRIu64 " vt_errors=%" PRIu64 "\n",
+                            sender.vtLowLatencyRequested ? 1u : 0u,
+                            sender.vtLowLatencyActive ? 1u : 0u,
+                            sender.vtLowLatencyFallbacks,
+                            sender.vtSpeedPriorityActive ? 1u : 0u,
+                            sender.vtFrameDelayBounded ? 1u : 0u,
+                            (int)sender.vtFrameDelayStatus,
+                            sender.vtHardwareEncoder ? 1u : 0u,
+                            sender.vtNv12Requested ? 1u : 0u,
+                            sender.vtNv12Active ? 1u : 0u,
+                            sender.vtPixelTransferFailures, curVtDropped,
+                            curVtErrors);
+                }
+                lastStatsNs = nowNs; lastCallbacks = curCallbacks;
+                lastSkipped = curSkipped; lastReplaced = curReplaced;
+                lastInvalid = curInvalid; lastProcessed = curProcessed;
+                lastSubmitted = curSubmitted; lastInFlightDrops = curInFlightDrops;
+                lastEncoded = curEncoded; lastVtDropped = curVtDropped;
+                lastVtErrors = curVtErrors; lastEncodeFailures = curEncodeFailures;
+                lastTxDroppedJobs = curTxDroppedJobs;
                 double liveMbps =
                     liveSec > 0.0
                         ? (double)totalWireBytes * 8.0 / liveSec / 1000000.0
@@ -651,8 +727,8 @@ int main(int argc, char **argv) {
         fprintf(stdout,
                 "m1-screen-vt low_latency_requested=%u low_latency_active=%u "
                 "low_latency_fallbacks=%" PRIu64
-                " speed_priority=%u frame_delay_bounded=%u hardware=%u "
-                "fast_profile_requested=%u fast_profile_active=%u "
+                " speed_priority=%u frame_delay_bounded=%u frame_delay_status=%d"
+                " hardware=%u fast_profile_requested=%u fast_profile_active=%u "
                 "reference_buffer_bounded=%u nv12_requested=%u nv12_active=%u "
                 "pixel_transfer_failures=%" PRIu64 " transfer_ms_p95=%.3f\n",
                 sender.vtLowLatencyRequested ? 1u : 0u,
@@ -660,6 +736,7 @@ int main(int argc, char **argv) {
                 sender.vtLowLatencyFallbacks,
                 sender.vtSpeedPriorityActive ? 1u : 0u,
                 sender.vtFrameDelayBounded ? 1u : 0u,
+                (int)sender.vtFrameDelayStatus,
                 sender.vtHardwareEncoder ? 1u : 0u,
                 sender.vtFastProfileRequested ? 1u : 0u,
                 sender.vtFastProfileActive ? 1u : 0u,

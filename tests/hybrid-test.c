@@ -153,5 +153,98 @@ static void test_scene_change(void) {
     assert(sharp_hybrid_repeated_motion(40,0)==1);
     assert(sharp_hybrid_repeated_motion(3,4)==0);
     assert(sharp_hybrid_repeated_motion(4,4)==1);
+    /* 5K: 3600 tiles. Entry needs 450, sustaining needs only 7. */
+    assert(sharp_hybrid_scene_change(60,3600)==0);
+    assert(sharp_hybrid_motion_sustained(60,3600,0)==1);
+    assert(sharp_hybrid_motion_sustained(7,3600,0)==1);
+    assert(sharp_hybrid_motion_sustained(6,3600,0)==0);
+    assert(sharp_hybrid_motion_sustained(3,16,0)==0);
+    assert(sharp_hybrid_motion_sustained(4,16,0)==1);
+    assert(sharp_hybrid_motion_sustained(19,3600,20)==0);
+    assert(sharp_hybrid_motion_sustained(20,3600,20)==1);
+    assert(sharp_hybrid_motion_sustained(0,3600,0)==0);
+    assert(sharp_hybrid_motion_sustained(9,0,0)==0);
 }
-int main(void) {test_maps();test_content_proof();test_tile_capture_label();test_encode_once_batch_fallback();test_scene_change();puts("hybrid-test PASS");return 0;}
+static sharp_hybrid_dirty_t dirty;
+static void test_repair_order(void) {
+    /* 640x384: 10x6 tiles, 5x3 groups of 2x2. */
+    uint16_t order[SHARP_HYBRID_MAX_TILES];
+    sharp_hybrid_dirty_reset(&dirty);
+    assert(sharp_hybrid_repair_order(&dirty,640,384,order)==0);
+    /* Motion in the lower-right group (tiles 48,49,58,59) plus one far tile. */
+    assert(sharp_hybrid_dirty_mark(&dirty,48,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,48,10)==0);
+    assert(sharp_hybrid_dirty_mark(&dirty,49,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,58,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,59,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,0,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,SHARP_HYBRID_MAX_TILES,10)==0);
+    assert(dirty.count==5 && sharp_hybrid_dirty_test(&dirty,59) && !sharp_hybrid_dirty_test(&dirty,1));
+    uint32_t n=sharp_hybrid_repair_order(&dirty,640,384,order);
+    assert(n==5);
+    /* The whole nearest group comes first, in tile order, then the outlier. */
+    assert(order[0]==48&&order[1]==49&&order[2]==58&&order[3]==59&&order[4]==0);
+    /* Centered motion orders strictly by distance and visits every tile once. */
+    sharp_hybrid_dirty_reset(&dirty);
+    for (uint32_t t=0;t<60;t++) assert(sharp_hybrid_dirty_mark(&dirty,t,10)==1);
+    n=sharp_hybrid_repair_order(&dirty,640,384,order);
+    assert(n==60);
+    uint8_t seen[60]={0};
+    uint64_t last=0;
+    for (uint32_t i=0;i<n;i++) {
+        assert(order[i]<60 && !seen[order[i]]); seen[order[i]]=1;
+        int64_t gx=(order[i]%10)/2,gy=(order[i]/10)/2;
+        int64_t dx=4*gx+2-10,dy=4*gy+2-6; /* centroid = (5,3) tiles */
+        uint64_t d2=(uint64_t)(dx*dx+dy*dy);
+        assert(d2>=last); last=d2;
+    }
+    assert(order[0]==24); /* group (2,1): tiles 24,25,34,35 */
+    assert(order[1]==25&&order[2]==34&&order[3]==35);
+    /* Marking from a source frame picks exactly the tiles that frame changed. */
+    sharp_hybrid_source_t *src=calloc(1,sizeof(*src));
+    assert(src && sharp_hybrid_source_init(src,640,384)==0);
+    src->versions[7]=9; src->versions[8]=10; src->versions[17]=10;
+    sharp_hybrid_dirty_reset(&dirty);
+    assert(sharp_hybrid_dirty_mark_frame(&dirty,src,10)==2);
+    assert(sharp_hybrid_dirty_mark_frame(&dirty,src,10)==0);
+    assert(sharp_hybrid_dirty_mark_frame(&dirty,src,0)==0);
+    assert(sharp_hybrid_dirty_test(&dirty,8)&&sharp_hybrid_dirty_test(&dirty,17)&&!sharp_hybrid_dirty_test(&dirty,7));
+    /* Tiles acknowledged at (or past) their current version are dropped;
+     * stale or missing acks keep the tile dirty, and the centroid follows. */
+    static uint32_t acked[SHARP_HYBRID_MAX_TILES];
+    sharp_hybrid_dirty_reset(&dirty);
+    src->versions[0]=5; src->versions[59]=12;
+    assert(sharp_hybrid_dirty_mark(&dirty,0,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,8,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,17,10)==1);
+    assert(sharp_hybrid_dirty_mark(&dirty,59,10)==1);
+    acked[0]=5; acked[8]=9; acked[17]=0; acked[59]=13;
+    assert(sharp_hybrid_dirty_prune_acked(&dirty,src,acked)==2);
+    assert(dirty.count==2 && !sharp_hybrid_dirty_test(&dirty,0) &&
+           sharp_hybrid_dirty_test(&dirty,8) && sharp_hybrid_dirty_test(&dirty,17) &&
+           !sharp_hybrid_dirty_test(&dirty,59));
+    assert(dirty.sum_x==8+7 && dirty.sum_y==0+1);
+    assert(sharp_hybrid_dirty_prune_acked(&dirty,src,acked)==0);
+    assert(sharp_hybrid_dirty_prune_acked(&dirty,src,NULL)==0);
+    sharp_hybrid_source_destroy(src); free(src);
+}
+static void test_repair_generation(void) {
+    /* A repair tile labelled with its source version is accepted by both the
+     * last VIDEO manifest and the later STATIC one, so the receiver can
+     * publish it over the video before the whole exit repair completes.
+     * Labelling it with the exit frame would only satisfy the STATIC map. */
+    static sharp_hybrid_receiver_t r;
+    assert(sharp_hybrid_receiver_init(&r,7,640,384)==0);
+    sharp_hybrid_message_t m={.session=7,.kind=SHARP_HYBRID_MAP,.width=640,.height=384,
+                              .total=60,.frame=200,.first=0,.count=60};
+    for (unsigned i=0;i<60;i++) m.versions[i]=150;
+    m.versions[3]=198;
+    assert(sharp_hybrid_accept_map(&r,&m)==1);
+    m.frame=205; m.flags=SHARP_HYBRID_STATIC;
+    assert(sharp_hybrid_accept_map(&r,&m)==1);
+    const sharp_hybrid_map_t *video=sharp_hybrid_find_map(&r,200),*stat=sharp_hybrid_find_map(&r,205);
+    assert(video && stat);
+    assert(sharp_hybrid_tile_matches(video,3,198) && sharp_hybrid_tile_matches(stat,3,198));
+    assert(!sharp_hybrid_tile_matches(video,3,205) && sharp_hybrid_tile_matches(stat,3,205));
+}
+int main(void) {test_maps();test_content_proof();test_tile_capture_label();test_encode_once_batch_fallback();test_scene_change();test_repair_order();test_repair_generation();puts("hybrid-test PASS");return 0;}

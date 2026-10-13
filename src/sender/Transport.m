@@ -314,6 +314,9 @@
     if (tile == NULL || tile->tile_id >= _cleanupTileCap || _cleanupRecords == NULL) {
         return;
     }
+    if (tile->generation != 0) {
+        frameId = tile->generation;
+    }
     screen_tx_cleanup_record_t *record = &_cleanupRecords[tile->tile_id];
     if (record->active &&
         (int32_t)(frameId - record->frame_id) < 0) {

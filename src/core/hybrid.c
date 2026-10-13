@@ -125,16 +125,20 @@ uint32_t sharp_hybrid_source_update(sharp_hybrid_source_t *s,const uint8_t *pixe
     uint32_t changed=0;*repeated=0;
     for (uint32_t t=0;t<s->total;t++) {
         sharp_tile_rect_t rect;sharp_tile_rect_for_id(s->width,s->height,(uint16_t)t,&rect);
-        int same=s->frame!=0;
-        for(uint32_t y=0;same && y<rect.h;y++)
-            same=memcmp(pixels+(size_t)(rect.y+y)*stride+rect.x*4u,
-                        s->pixels+((size_t)(rect.y+y)*s->width+rect.x)*4u,rect.w*4u)==0;
-        if (same) continue;
+        /* Rows before the first mismatch are already identical, so only the
+         * remainder of a changed tile needs to be copied into the reference. */
+        uint32_t first=0;
+        if (s->frame!=0) {
+            while(first<rect.h && memcmp(pixels+(size_t)(rect.y+first)*stride+rect.x*4u,
+                        s->pixels+((size_t)(rect.y+first)*s->width+rect.x)*4u,rect.w*4u)==0)
+                first++;
+            if (first==rect.h) continue;
+        }
         s->streak[t]=(s->versions[t] && now-s->changed_ns[t]<100000000ULL)
             ? (uint8_t)(s->streak[t]<255?s->streak[t]+1:255) : 1;
         if(s->streak[t]>=3) (*repeated)++;
         s->versions[t]=frame;s->changed_ns[t]=now;changed++;
-        for(uint32_t y=0;y<rect.h;y++)
+        for(uint32_t y=first;y<rect.h;y++)
             memcpy(s->pixels+((size_t)(rect.y+y)*s->width+rect.x)*4u,
                    pixels+(size_t)(rect.y+y)*stride+rect.x*4u,rect.w*4u);
     }
@@ -149,4 +153,67 @@ int sharp_hybrid_scene_change(uint32_t changed,uint32_t total) {
 int sharp_hybrid_repeated_motion(uint32_t repeated,uint32_t min_tiles) {
     uint32_t need=min_tiles?min_tiles:SHARP_HYBRID_REPEAT_TILES_DEFAULT;
     return repeated>=need;
+}
+int sharp_hybrid_motion_sustained(uint32_t changed,uint32_t total,uint32_t min_tiles) {
+    if (!total || !changed) return 0;
+    uint32_t need=min_tiles?min_tiles:total/512u;
+    if (!min_tiles && need<4u) need=4u;
+    return changed>=need;
+}
+void sharp_hybrid_dirty_reset(sharp_hybrid_dirty_t *d) { memset(d,0,sizeof(*d)); }
+int sharp_hybrid_dirty_test(const sharp_hybrid_dirty_t *d,uint32_t tile) {
+    return tile<SHARP_HYBRID_MAX_TILES && (d->bits[tile>>3]>>(tile&7)&1u);
+}
+int sharp_hybrid_dirty_mark(sharp_hybrid_dirty_t *d,uint32_t tile,uint32_t cols) {
+    if (tile>=SHARP_HYBRID_MAX_TILES || !cols || sharp_hybrid_dirty_test(d,tile)) return 0;
+    d->bits[tile>>3]|=(uint8_t)(1u<<(tile&7));
+    d->count++; d->sum_x+=tile%cols; d->sum_y+=tile/cols;
+    return 1;
+}
+uint32_t sharp_hybrid_dirty_mark_frame(sharp_hybrid_dirty_t *d,const sharp_hybrid_source_t *s,
+                                       uint32_t frame) {
+    uint32_t cols=sharp_tile_cols(s->width),marked=0;
+    if (!frame) return 0;
+    for (uint32_t t=0;t<s->total;t++)
+        if (s->versions[t]==frame) marked+=(uint32_t)sharp_hybrid_dirty_mark(d,t,cols);
+    return marked;
+}
+uint32_t sharp_hybrid_dirty_prune_acked(sharp_hybrid_dirty_t *d,const sharp_hybrid_source_t *s,
+                                        const uint32_t *acked) {
+    uint32_t cols=sharp_tile_cols(s->width),pruned=0;
+    if (!d->count || !cols || !acked) return 0;
+    for (uint32_t t=0;t<s->total && t<SHARP_HYBRID_MAX_TILES;t++) {
+        if (!sharp_hybrid_dirty_test(d,t) || !acked[t] ||
+            (int32_t)(acked[t]-s->versions[t])<0) continue;
+        d->bits[t>>3]&=(uint8_t)~(1u<<(t&7));
+        d->count--; d->sum_x-=t%cols; d->sum_y-=t/cols; pruned++;
+    }
+    return pruned;
+}
+typedef struct { uint64_t key; uint16_t tile; } repair_key_t;
+static int repair_key_cmp(const void *a,const void *b) {
+    const repair_key_t *x=a,*y=b;
+    if (x->key!=y->key) return x->key<y->key?-1:1;
+    return (int)x->tile-(int)y->tile;
+}
+uint32_t sharp_hybrid_repair_order(const sharp_hybrid_dirty_t *d,uint16_t width,uint16_t height,
+                                   uint16_t *order) {
+    uint32_t cols=sharp_tile_cols(width),total=sharp_tile_count(width,height),n=0;
+    if (!d->count || !cols || total>SHARP_HYBRID_MAX_TILES) return 0;
+    repair_key_t *keys=malloc(sizeof(*keys)*d->count);
+    if (!keys) return 0;
+    /* Centroid and group centers in half-tile units keep the math integral. */
+    int64_t cx=(int64_t)((2u*d->sum_x+d->count)/d->count);
+    int64_t cy=(int64_t)((2u*d->sum_y+d->count)/d->count);
+    for (uint32_t t=0;t<total;t++) {
+        if (!sharp_hybrid_dirty_test(d,t) || n>=d->count) continue;
+        uint32_t gx=(t%cols)/2u,gy=(t/cols)/2u;
+        int64_t dx=(int64_t)(4u*gx+2u)-cx, dy=(int64_t)(4u*gy+2u)-cy;
+        uint64_t group=(uint64_t)gy*((cols+1u)/2u)+gx;
+        keys[n].key=((uint64_t)(dx*dx+dy*dy)<<20)|group; keys[n].tile=(uint16_t)t; n++;
+    }
+    qsort(keys,n,sizeof(keys[0]),repair_key_cmp);
+    for (uint32_t i=0;i<n;i++) order[i]=keys[i].tile;
+    free(keys);
+    return n;
 }

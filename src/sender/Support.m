@@ -195,6 +195,23 @@ int env_flag_enabled(const char *name) {
     return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
 }
 
+int env_flag_default_on(const char *name) {
+    return !env_flag_disabled(name);
+}
+
+long env_long_or_default(const char *name, long fallback, long min, long max) {
+    const char *value = getenv(name);
+    if (value == NULL || value[0] == '\0') {
+        return fallback;
+    }
+    char *end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (end == value || parsed < min || parsed > max) {
+        return fallback;
+    }
+    return parsed;
+}
+
 int env_flag_disabled(const char *name) {
     const char *value = getenv(name);
     return value != NULL && value[0] != '\0' && strcmp(value, "0") == 0;
@@ -340,7 +357,6 @@ void h264_output_callback(void *outputCallbackRefCon,
                                  void *sourceFrameRefCon, OSStatus status,
                                  VTEncodeInfoFlags infoFlags,
                                  CMSampleBufferRef sampleBuffer) {
-    (void)infoFlags;
     SharpScreenSender *sender = (__bridge SharpScreenSender *)outputCallbackRefCon;
     h264_sample_context_t *context = (h264_sample_context_t *)sourceFrameRefCon;
     if (context != NULL) {
@@ -371,6 +387,14 @@ void h264_output_callback(void *outputCallbackRefCon,
             sender.fullFrameEncodeInFlight--;
         }
         sender.h264EncodeFailures++;
+        /* Tell encoder drops (no output, status OK) apart from errors. A
+         * dropped frame still fires this callback, so callback latency alone
+         * cannot show that video stopped. */
+        if (status == noErr && (infoFlags & kVTEncodeInfo_FrameDropped)) {
+            sender.vtDroppedFrames++;
+        } else {
+            sender.vtCallbackErrors++;
+        }
         if (context != NULL) {
             if (context->retained_pixel_buffer != NULL) {
                 CVPixelBufferRelease(context->retained_pixel_buffer);

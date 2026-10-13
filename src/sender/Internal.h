@@ -164,6 +164,9 @@ typedef struct screen_tx_tile {
     uint16_t tile_id;
     uint8_t kind;
     sharp_tile_rect_t rect;
+    /* Capture that owns these pixels when it differs from the job frame
+     * (verified hybrid labels tiles with their source version); 0 = job. */
+    uint32_t generation;
     uint8_t bgra[SHARP_TILE_BYTES];
 } screen_tx_tile_t;
 
@@ -283,6 +286,8 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     CMSampleBufferRef _lastCompleteSampleBuffer;
     sharp_hybrid_source_t *_verifiedSource;
     uint64_t _verifiedSession, _verifiedNonce, _verifiedLastControlNs, _verifiedLastMotionNs;
+    uint64_t _verifiedVideoEnterNs, _verifiedMinVideoNs, _verifiedExitQuietNs;
+    uint32_t _verifiedSustainTiles;
     uint64_t _verifiedHandshakeStartNs, _verifiedExitStartNs;
     uint32_t _verifiedLastCommitLogged, _verifiedLastMapFrame, _verifiedCommittedFrame;
     uint32_t _verifiedAttemptVersion[SHARP_HYBRID_MAX_TILES], _verifiedNextTile;
@@ -296,7 +301,17 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     uint64_t _verifiedAttemptNs[SHARP_HYBRID_MAX_TILES];
     BOOL _verifiedReady, _verifiedWantVideo, _verifiedExitPending;
     uint32_t _verifiedDropStaticMaps, _verifiedLastDumpFrame;
-    uint32_t _verifiedTargetFrame;
+    uint32_t _verifiedTargetFrame, _verifiedExitFrame;
+    /* Progressive exit repair: tiles touched while video was active, sent
+     * center-out in acknowledged batches when video ends. */
+    sharp_hybrid_dirty_t _verifiedDirty;
+    uint16_t _verifiedRepairOrder[SHARP_HYBRID_MAX_TILES];
+    uint8_t _verifiedRepairQueued[SHARP_HYBRID_MAX_TILES / 8u];
+    uint32_t _verifiedRepairCount, _verifiedRepairPos, _verifiedRepairBatchStart;
+    uint32_t _verifiedRepairBatchTiles, _verifiedRepairBackgroundTiles;
+    uint32_t _verifiedRepairBatches, _verifiedRepairTilesSent;
+    uint64_t _verifiedRepairBatchNs, _verifiedRepairBatchTimeoutNs, _verifiedRepairStartNs;
+    BOOL _verifiedProgressiveRepair;
     dispatch_source_t _verifiedTimer;
     uint64_t _captureIdleSinceNs;
     uint64_t _motionPrerollDeadlineNs;
@@ -454,6 +469,8 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     uint64_t _h264TargetBitrate;
     uint64_t _h264Keyframes;
     uint64_t _h264EncodeFailures;
+    uint64_t _vtDroppedFrames;
+    uint64_t _vtCallbackErrors;
     uint64_t _h264FeedbackPackets;
     uint64_t _h264FullFrameFeedbackIgnored;
     uint64_t _h264FullFrameKeyframeRequests;
@@ -568,6 +585,7 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
     uint64_t _vtLowLatencyFallbacks;
     BOOL _vtSpeedPriorityActive;
     BOOL _vtFrameDelayBounded;
+    int32_t _vtFrameDelayStatus;
     BOOL _vtFastProfileRequested;
     BOOL _vtFastProfileActive;
     BOOL _vtReferenceBufferBounded;
@@ -641,6 +659,8 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
 @property(nonatomic, assign) uint64_t h264TargetBitrate;
 @property(nonatomic, assign) uint64_t h264Keyframes;
 @property(nonatomic, assign) uint64_t h264EncodeFailures;
+@property(nonatomic, assign) uint64_t vtDroppedFrames;
+@property(nonatomic, assign) uint64_t vtCallbackErrors;
 @property(nonatomic, assign) uint64_t h264FeedbackPackets;
 @property(nonatomic, assign) uint64_t h264FullFrameFeedbackIgnored;
 @property(nonatomic, assign) uint64_t h264FullFrameKeyframeRequests;
@@ -759,6 +779,7 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
 @property(nonatomic, assign) uint64_t vtLowLatencyFallbacks;
 @property(nonatomic, assign) BOOL vtSpeedPriorityActive;
 @property(nonatomic, assign) BOOL vtFrameDelayBounded;
+@property(nonatomic, assign) int32_t vtFrameDelayStatus;
 @property(nonatomic, assign) BOOL vtFastProfileRequested;
 @property(nonatomic, assign) BOOL vtFastProfileActive;
 @property(nonatomic, assign) BOOL vtReferenceBufferBounded;
@@ -1003,6 +1024,9 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
 - (void)submitVerifiedVideo:(CVPixelBufferRef)pixels;
 - (void)processVerifiedPixels:(CVPixelBufferRef)pixels now:(uint64_t)now;
 - (void)verifiedMaintenance;
+- (void)beginVerifiedRepairAt:(uint64_t)now;
+- (void)abortVerifiedRepair;
+- (uint16_t)selectVerifiedRepairBatch:(uint16_t *)selected now:(uint64_t)now;
 @end
 
 @interface SharpScreenSender (Metrics)
@@ -1034,6 +1058,8 @@ void h264_snap_large_envelope(sharp_m2_region_t *region,
 int32_t h264_target_bitrate(uint32_t width, uint32_t height,
                                    uint32_t fps);
 int env_flag_enabled(const char *name);
+int env_flag_default_on(const char *name);
+long env_long_or_default(const char *name, long fallback, long min, long max);
 int env_flag_disabled(const char *name);
 uint8_t sharp_fec_group_count(uint16_t chunk_count);
 uint8_t sharp_fec_group_for_chunk(uint16_t chunk_id,

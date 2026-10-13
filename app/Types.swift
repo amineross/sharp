@@ -75,7 +75,34 @@ enum SharpResolution: String, CaseIterable, Identifiable, Codable {
             ((width + 15) / 16) * ((height + 15) / 16) <= 36864
     }
 
-    private static func h264PictureSize(_ sourceWidth: Int, _ sourceHeight: Int) -> (Int, Int) {
+    // Same integers as sharp_h264_motion_picture_size with the sender's
+    // SHARP_VT_MOTION_MAX_WIDTH (default 2560 above 4096 wide, 0 = no cap): the size the
+    // full-frame video is actually encoded at.
+    static func motionEncodeSize(_ sourceWidth: Int, _ sourceHeight: Int) -> (Int, Int) {
+        func atLeast2Even(_ value: Int) -> Int {
+            if value < 2 { return 2 }
+            return value % 2 == 0 ? value : value - 1
+        }
+        var maxWidth = 2560
+        if let raw = ProcessInfo.processInfo.environment["SHARP_VT_MOTION_MAX_WIDTH"],
+           let parsed = Int(raw.trimmingCharacters(in: .whitespaces)),
+           parsed >= 0, parsed <= 8192 {
+            maxWidth = parsed
+        }
+        var width = atLeast2Even(sourceWidth)
+        var height = atLeast2Even(sourceHeight)
+        // Only sources wider than 4096 are capped (SHARP_H264_MOTION_CAP_ABOVE_WIDTH).
+        if maxWidth != 0 && width > 4096 {
+            let cap = atLeast2Even(maxWidth)
+            if width > cap {
+                height = atLeast2Even(height * cap / width)
+                width = cap
+            }
+        }
+        return h264PictureSize(width, height)
+    }
+
+    static func h264PictureSize(_ sourceWidth: Int, _ sourceHeight: Int) -> (Int, Int) {
         func atLeast2Even(_ value: Int) -> Int {
             if value < 2 { return 2 }
             return value % 2 == 0 ? value : value - 1

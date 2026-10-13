@@ -76,4 +76,35 @@ int sharp_hybrid_scene_change(uint32_t changed, uint32_t total);
  * tiles of 64 px) switches to video. */
 #define SHARP_HYBRID_REPEAT_TILES_DEFAULT 8u
 int sharp_hybrid_repeated_motion(uint32_t repeated, uint32_t min_tiles);
+/* Motion that keeps an active video episode alive: at least min_tiles
+ * changed tiles (0 selects max(4, total/512)). Lower than the entry bar. */
+int sharp_hybrid_motion_sustained(uint32_t changed, uint32_t total, uint32_t min_tiles);
+/* Tiles touched by motion while video is active. Exiting video repairs these
+ * first, from the motion centroid outward; everything else is already
+ * verified. The centroid is accumulated in tile units. */
+typedef struct sharp_hybrid_dirty {
+    uint8_t bits[SHARP_HYBRID_MAX_TILES / 8u];
+    uint32_t count;
+    uint64_t sum_x, sum_y;
+} sharp_hybrid_dirty_t;
+void sharp_hybrid_dirty_reset(sharp_hybrid_dirty_t *d);
+int sharp_hybrid_dirty_test(const sharp_hybrid_dirty_t *d, uint32_t tile);
+/* Marks one tile; returns 1 when it was newly marked. */
+int sharp_hybrid_dirty_mark(sharp_hybrid_dirty_t *d, uint32_t tile, uint32_t cols);
+/* Marks every tile whose version equals frame (the tiles that frame changed). */
+uint32_t sharp_hybrid_dirty_mark_frame(sharp_hybrid_dirty_t *d,
+                                       const sharp_hybrid_source_t *s, uint32_t frame);
+/* Drops tiles the receiver already acknowledged at their current version
+ * (acked[t] != 0 and acked[t] >= versions[t]). A tile touched once during
+ * video, e.g. by the entry frame, and then refined by the background scan
+ * while video kept running needs no exit repair. Returns tiles dropped. */
+uint32_t sharp_hybrid_dirty_prune_acked(sharp_hybrid_dirty_t *d,
+                                        const sharp_hybrid_source_t *s,
+                                        const uint32_t *acked);
+/* Writes the dirty tiles to order[] (capacity SHARP_HYBRID_MAX_TILES), nearest
+ * 2x2 tile group to the motion centroid first, so the receiver's 128x128
+ * publish groups complete as early as possible. Ties break by tile id, so the
+ * order is deterministic. Returns the number of tiles written. */
+uint32_t sharp_hybrid_repair_order(const sharp_hybrid_dirty_t *d, uint16_t width,
+                                   uint16_t height, uint16_t *order);
 #endif
