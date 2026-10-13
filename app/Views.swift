@@ -83,8 +83,8 @@ struct SharpResolutionPicker: View {
                             .font(.system(size: 8, weight: .medium)).tracking(0.5)
                         Text("\(size.0)×\(size.1)")
                             .font(.system(size: 12, weight: .medium))
-                        if showsExperimental, item.isExperimental(for: target) {
-                            Text("Experimental")
+                        if showsExperimental, item.isSupported(for: target), item.isExperimental(for: target) {
+                            Text("Full panel")
                                 .font(.system(size: 8)).foregroundColor(selection == item ? SharpColor.bg.opacity(0.7) : SharpColor.dim)
                         }
                     }
@@ -99,6 +99,30 @@ struct SharpResolutionPicker: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(SharpColor.line, lineWidth: 1))
+    }
+}
+
+struct SharpResolutionNotes: View {
+    let resolution: SharpResolution
+    let target: SharpDisplaySize
+    private var stream: (Int, Int) { resolution.size(for: target) }
+    private var encoded: (Int, Int) { resolution.encodeSize(for: target) }
+    static func applies(_ resolution: SharpResolution, to target: SharpDisplaySize) -> Bool {
+        let stream = resolution.size(for: target)
+        let encoded = resolution.encodeSize(for: target)
+        return resolution.usesRetina(for: target) || stream.0 > encoded.0 || stream.1 > encoded.1
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if resolution.usesRetina(for: target) {
+                Text("Retina · \(stream.0 / 2)×\(stream.1 / 2) points, \(stream.0)×\(stream.1) pixels.")
+                    .font(.system(size: 11)).foregroundColor(SharpColor.dim)
+            }
+            if stream.0 > encoded.0 || stream.1 > encoded.1 {
+                Text("Motion is encoded at \(encoded.0)×\(encoded.1). Still areas stay full resolution.")
+                    .font(.system(size: 11)).foregroundColor(SharpColor.dim)
+            }
+        }
     }
 }
 
@@ -394,6 +418,9 @@ struct SharpSettingsView: View {
                     ), target: target)
                     Text("Matched to the display Mac’s \(target.width)×\(target.height) panel.")
                         .font(.system(size: 11)).foregroundColor(SharpColor.dim)
+                    if SharpResolutionNotes.applies(model.resolution, to: target) {
+                        SharpResolutionNotes(resolution: model.resolution, target: target)
+                    }
                 } else {
                     Text("Connect a Sharp display to see resolutions matched to its panel.")
                         .font(.system(size: 12)).foregroundColor(SharpColor.dim)
@@ -507,6 +534,9 @@ struct SharpAdvancedView: View {
                         ), target: target)
                         Text("Based on this Mac’s last reported \(target.width)×\(target.height) display.")
                             .font(.system(size: 11)).foregroundColor(SharpColor.dim)
+                        if SharpResolutionNotes.applies(model.resolution, to: target) {
+                            SharpResolutionNotes(resolution: model.resolution, target: target)
+                        }
                     } else {
                         Text("Connect this Mac to see its resolution choices.")
                             .font(.system(size: 12)).foregroundColor(SharpColor.dim)

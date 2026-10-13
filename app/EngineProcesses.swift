@@ -103,6 +103,11 @@ extension SharpModel {
         env["SHARP_H264_BITRATE_FACTOR"] = pixels >= 3840 * 2160 ? "0.20" : "0.48"
         env["SHARP_CURSOR_OVERLAY"] = "1"
         env["SHARP_VDISPLAY"] = "1"
+        let panel = peerDisplaySize ?? rememberedPeerID.flatMap { profiles[$0]?.display }
+        if let panel, resolution.usesRetina(for: panel) {
+            env["SHARP_VDISPLAY_HIDPI"] = "1"
+            env["SHARP_SCK_CAPTURE_RESOLUTION"] = "best"
+        }
         env["SHARP_MIRROR_VDISPLAY"] = displayMode == .mirror ? "1" : "0"
         env["SHARP_MOTION_PREROLL"] = "1"
         env["SHARP_PACING"] = "responsive"

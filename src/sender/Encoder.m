@@ -1,4 +1,5 @@
 #import "Internal.h"
+#import "sharp/h264_limit.h"
 
 @implementation SharpScreenSender (Encoder)
 - (void)destroyH264Encoder {
@@ -770,20 +771,25 @@
         return NO;
     }
     [self maybeRampFullFrameBitrate];
+    uint32_t encW = 0;
+    uint32_t encH = 0;
+    sharp_h264_picture_size(_width, _height, &encW, &encH);
+    BOOL scaleToEncode = encW != _width || encH != _height;
     VTCompressionSessionRef session =
         [self ensureH264EncoderForRegion:SHARP_H264_FULLFRAME_ID
-                                    width:_width
-                                   height:_height];
+                                    width:encW
+                                   height:encH];
     if (session == NULL) {
         return NO;
     }
     CVPixelBufferRef encodeBuffer = pixelBuffer;
     BOOL useNv12Input = _vtNv12Requested ? YES : NO;
     BOOL usingDirectBuffer =
-        !useNv12Input && direct && CVPixelBufferGetIOSurface(pixelBuffer) != NULL
+        !scaleToEncode && !useNv12Input && direct &&
+                CVPixelBufferGetIOSurface(pixelBuffer) != NULL
             ? YES
             : NO;
-    if (direct && !usingDirectBuffer && !useNv12Input) {
+    if (direct && !scaleToEncode && !usingDirectBuffer && !useNv12Input) {
         _fullFrameDirectFallbacks++;
     }
     if (!usingDirectBuffer) {
@@ -801,7 +807,7 @@
             _h264PixelBufferPoolFailures++;
             return NO;
         }
-        if (useNv12Input) {
+        if (useNv12Input || scaleToEncode) {
             if (_vtPixelTransferSession == NULL &&
                 VTPixelTransferSessionCreate(
                     NULL, &_vtPixelTransferSession) != noErr) {
@@ -829,7 +835,9 @@
                 _h264EncodeFailures++;
                 return NO;
             }
-            _vtNv12Active = YES;
+            if (useNv12Input) {
+                _vtNv12Active = YES;
+            }
         } else {
             if (!sourceLocked &&
                 CVPixelBufferLockBaseAddress(pixelBuffer,
@@ -875,8 +883,8 @@
     context->region_id = SHARP_H264_FULLFRAME_ID;
     context->x = 0;
     context->y = 0;
-    context->w = (uint16_t)_width;
-    context->h = (uint16_t)_height;
+    context->w = (uint16_t)encW;
+    context->h = (uint16_t)encH;
     context->generation = frameId;
     context->full_frame_direct = usingDirectBuffer ? 1u : 0u;
     context->emit_frame_end = emitFrameEnd ? 1u : 0u;

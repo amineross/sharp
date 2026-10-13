@@ -88,10 +88,11 @@ $(BUILD)/%-test: tests/%-test.c $(CORE_OBJS)
 $(BUILD)/audio-ring-test: tests/audio-ring-test.m app/SharpAudio.m app/SharpAudio.h
 	$(CC) $(ARCHS) -O2 -Wall -Wextra $(MACFLAGS) -fobjc-arc $< -framework Foundation -framework CoreAudio -framework AudioToolbox -o $@
 
-test: $(BUILD)/hybrid-test $(BUILD)/tile-correctness-test $(BUILD)/audio-ring-test $(BUILD)/app-state-test
+test: $(BUILD)/hybrid-test $(BUILD)/tile-correctness-test $(BUILD)/audio-ring-test $(BUILD)/h264-limit-test $(BUILD)/app-state-test
 	$(BUILD)/hybrid-test
 	$(BUILD)/tile-correctness-test
 	$(BUILD)/audio-ring-test
+	$(BUILD)/h264-limit-test
 	$(BUILD)/app-state-test
 
 install: sharp
