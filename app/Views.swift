@@ -368,8 +368,8 @@ struct SharpMenuView: View {
                 }
             }
 
-            Button(model.sharingEnabled ? "Pause Sharp" : "Resume Sharp") { model.toggleSharing() }
-                .buttonStyle(SharpButtonStyle(filled: model.sharingEnabled))
+            Button(model.sharingPaused ? "Resume Sharp" : "Pause Sharp") { model.toggleSharing() }
+                .buttonStyle(SharpButtonStyle(filled: !model.sharingPaused))
             HStack {
                 Spacer()
                 Button("Quit Sharp") { model.shutdown(); NSApp.terminate(nil) }

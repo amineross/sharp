@@ -78,6 +78,16 @@ int main(int argc, char **argv) {
 
     @autoreleasepool {
         CGDirectDisplayID physicalDisplayID = CGMainDisplayID();
+        /* A closed MacBook or a Mac mini with no screen has nothing to mirror.
+         * Show the desktop on the Sharp display alone, as Extend does,
+         * instead of failing and reconnecting forever. */
+        if (virtualMirrorRequested &&
+            (physicalDisplayID == kCGNullDirectDisplay || !CGDisplayIsActive(physicalDisplayID))) {
+            fprintf(stdout, "m1-screen-vdisplay-mirror fallback=extend reason=no-active-display physical=%u\n",
+                    physicalDisplayID);
+            fflush(stdout);
+            virtualMirrorRequested = 0;
+        }
         CGDirectDisplayID requestedDisplayID = 0u;
         id virtualDisplay = nil;
         if (virtualDisplayRequested && virtualDisplayApi) {
@@ -101,10 +111,12 @@ int main(int argc, char **argv) {
                     requestedDisplayID);
             fflush(stdout);
             if (!virtualMirrorActive) {
-                fprintf(stderr,
-                        "target-shaped mirror could not be configured; refusing distorted fallback\n");
-                close(fd);
-                return 1;
+                /* The Sharp display still shows the desktop correctly; only
+                 * the mirror onto this Mac's own screen is missing. */
+                fprintf(stdout,
+                        "m1-screen-vdisplay-mirror fallback=extend reason=mirror-refused physical=%u\n",
+                        physicalDisplayID);
+                fflush(stdout);
             }
         }
         fprintf(stdout,

@@ -244,20 +244,34 @@ final class SharpModel: ObservableObject {
         if configured { restartRole() }
     }
 
+    /// Paused on either Mac. Either Mac can resume the pair.
+    var sharingPaused: Bool { !sharingEnabled || (isPeerConnected && !peerSharingEnabled) }
+
     func toggleSharing() {
-        sharingEnabled.toggle()
-        trace("sharing \(sharingEnabled ? "resumed" : "paused")")
-        defaults.set(sharingEnabled, forKey: "sharingEnabled")
-        if !sharingEnabled {
-            control?.send(ControlMessage(command: "stop", peerID: peerID,
-                peerName: Host.current().localizedName ?? "Mac", sharingEnabled: false))
-            stopSender(); stopReceiver()
-            status = isPeerConnected ? "Paused" : "Connect an Ethernet or Thunderbolt cable"
-        } else if control != nil {
-            control?.send(ControlMessage(command: "resume", peerID: peerID,
-                peerName: Host.current().localizedName ?? "Mac", sharingEnabled: true))
-            if role == .sender { sendStartRequest() }
-        } else { startRole() }
+        if sharingPaused { resumeSharing() } else { pauseSharing() }
+    }
+
+    func pauseSharing() {
+        sharingEnabled = false
+        trace("sharing paused")
+        defaults.set(false, forKey: "sharingEnabled")
+        control?.send(ControlMessage(command: "stop", peerID: peerID,
+            peerName: Host.current().localizedName ?? "Mac", sharingEnabled: false))
+        stopSender(); stopReceiver()
+        status = isPeerConnected ? "Paused" : "Connect an Ethernet or Thunderbolt cable"
+    }
+
+    /// Resumes this Mac and, unless the request came from the other Mac,
+    /// asks it to resume too, so a pause made on one Mac can be lifted on the other.
+    func resumeSharing(fromPeer: Bool = false) {
+        sharingEnabled = true
+        trace("sharing resumed\(fromPeer ? " by \(peerName)" : "")")
+        defaults.set(true, forKey: "sharingEnabled")
+        guard let control else { startRole(); return }
+        control.send(ControlMessage(command: fromPeer ? "resume" : "resume-all", peerID: peerID,
+            peerName: Host.current().localizedName ?? "Mac", sharingEnabled: true))
+        // A peer's request is handled next as a plain resume, which starts the stream.
+        if role == .sender && !fromPeer { sendStartRequest() }
     }
 
     var connectionStatus: SharpConnectionStatus {

@@ -120,7 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defaults.set(latest.build, forKey: "updateOfferedBuild")
         let alert = NSAlert()
         alert.messageText = "Sharp \(latest.version) is available"
-        alert.informativeText = "Download it at aminerostane.com/sharp."
+        let notes = (latest.notes ?? []).prefix(8).map { "• \($0)" }.joined(separator: "\n")
+        alert.informativeText = notes.isEmpty ? "Download it at aminerostane.com/sharp."
+            : "What's new:\n\(notes)\n\nDownload it at aminerostane.com/sharp."
         alert.addButton(withTitle: "Download")
         alert.addButton(withTitle: "Later")
         NSApp.activate(ignoringOtherApps: true)
@@ -328,4 +330,5 @@ struct SharpLatestVersion: Decodable {
     let version: String
     let build: Int
     let url: String
+    let notes: [String]?
 }

@@ -144,8 +144,13 @@ extension SharpModel {
     func handleReceiverMessage(_ text: String) {
         guard !localSleeping else { return }
         guard let data = text.data(using: .utf8),
-              let message = try? JSONDecoder().decode(ControlMessage.self, from: data) else { return }
+              var message = try? JSONDecoder().decode(ControlMessage.self, from: data) else { return }
         if handleCursorStyle(message) { return }
+        if message.command == "resume-all" {
+            // The other Mac resumed: lift this Mac's own pause, then carry on as a resume.
+            if !sharingEnabled { resumeSharing(fromPeer: true) }
+            message.command = "resume"
+        }
         if handleAudioMessage(message) { return }
         if message.command == "ping" { return }
         if message.command == "benchmark-scene" {
@@ -386,8 +391,13 @@ extension SharpModel {
     func handleSenderMessage(_ text: String) {
         guard !localSleeping else { return }
         guard let data = text.data(using: .utf8),
-              let message = try? JSONDecoder().decode(ControlMessage.self, from: data) else { return }
+              var message = try? JSONDecoder().decode(ControlMessage.self, from: data) else { return }
         if handleCursorStyle(message) { return }
+        if message.command == "resume-all" {
+            // The other Mac resumed: lift this Mac's own pause, then carry on as a resume.
+            if !sharingEnabled { resumeSharing(fromPeer: true) }
+            message.command = "resume"
+        }
         if handleAudioMessage(message) { return }
         if message.command == "ping" { return }
         if message.command == "benchmark-line" {

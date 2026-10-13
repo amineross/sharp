@@ -168,6 +168,53 @@ static void sharp_hide_idle_local_cursor(void) {
     pthread_mutex_unlock(&_stateLock);
 }
 
+/* macOS can refuse the full-screen request, for example when another app is
+ * frontmost as the Mac wakes. The window then stays titled under the menu bar.
+ * Check and ask again until it is full screen once; after that, the user's
+ * own choice to leave full screen stands. */
+static BOOL g_full_screen_reached = NO;
+static BOOL g_full_screen_entering = NO;
+
+- (void)ensureFullScreenAttempt:(int)attempt {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (g_full_screen_reached || self->_window == nil || attempt > 5) return;
+        if (!g_full_screen_entering) [self requestFullScreen];
+        [self ensureFullScreenAttempt:attempt + 1];
+    });
+}
+
+- (void)requestFullScreen {
+    if (g_full_screen_reached || g_full_screen_entering ||
+        (_window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    fprintf(stdout, "m1-display-recv fullscreen_retry=1\n");
+    fflush(stdout);
+    [NSApp activateIgnoringOtherApps:YES];
+    [_window makeKeyAndOrderFront:nil];
+    [_window toggleFullScreen:nil];
+}
+
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+    (void)notification;
+    g_full_screen_entering = YES;
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+    (void)notification;
+    g_full_screen_entering = NO;
+    g_full_screen_reached = YES;
+}
+
+- (void)windowDidFailToEnterFullScreen:(NSWindow *)window {
+    (void)window;
+    g_full_screen_entering = NO;
+}
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    (void)notification;
+    if (_config.fullscreen) [self requestFullScreen];
+}
+
 - (void)windowDidResize:(NSNotification *)notification {
     (void)notification;
     [self updateDrawableSize];
@@ -263,7 +310,10 @@ static void sharp_hide_idle_local_cursor(void) {
                                           styleMask:style
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
-    [_window setTitle:@"sharp M1 framebuffer"];
+    [_window setTitle:@"Sharp"];
+    /* The sender captures sRGB. Tag the window so macOS converts it to this
+     * panel's profile, the way it does for the iMac's own apps. */
+    [_window setColorSpace:[NSColorSpace sRGBColorSpace]];
     [_window setContentAspectRatio:streamSize];
     [_window setLevel:NSNormalWindowLevel];
     [_window setCollectionBehavior:NSWindowCollectionBehaviorManaged |
@@ -284,6 +334,7 @@ static void sharp_hide_idle_local_cursor(void) {
     [NSApp activateIgnoringOtherApps:YES];
     if (_config.fullscreen) {
         [_window toggleFullScreen:nil];
+        [self ensureFullScreenAttempt:1];
     }
     [_frameView prepareOpenGL];
     if (getenv("SHARP_CURSOR_CONTROL")) {

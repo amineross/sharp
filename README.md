@@ -26,6 +26,7 @@ Sharp uses an Ethernet or Thunderbolt cable to turn an older Mac into a display 
 | `include/sharp/` | Headers for the C core |
 | `src/sender/` | Screen capture, virtual display, H.264 encoding, tile scheduling, and network output |
 | `src/receiver/` | Network input, H.264 decoding, tile composition, and display presentation |
+| `high-sierra/` | Receiver app for iMacs on macOS 10.13, built on the same engine |
 | `src/platform/` | macOS cursor rendering |
 | `resources/` | App icons and cursor assets |
 | `tests/` | Focused engine and app-state checks |
@@ -37,4 +38,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for frame ownership and thread boundaries
 
 ## Build
 
-On macOS with Xcode command-line tools, run `make` for the universal app, `make test` for checks, or `make installer` for the DMG. The sender needs macOS 12.3 or later; system-audio sending needs macOS 14.2 or later. The receiver targets macOS 10.15 or later.
+On macOS with Xcode command-line tools, run `make` for the universal app, `make test` for checks, or `make installer` for the DMG. The sender needs macOS 12.3 or later; system-audio sending needs macOS 14.2 or later. The receiver targets macOS 10.15 or later; `high-sierra/` builds the receiver for macOS 10.13.

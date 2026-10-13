@@ -75,6 +75,16 @@ struct AppStateCheck {
         assert(model.isPeerConnected && model.connectionTitle == "Paused")
         assert(model.connectionDetail == "Display Mac")
         assert(model.peerDisplaySize?.width == 2560)
+        assert(model.sharingPaused)
+        model.handleReceiverMessage("{\"command\":\"resume-all\",\"peerID\":\"test-peer\",\"peerName\":\"Display Mac\",\"sharingEnabled\":true}")
+        assert(model.sharingEnabled && !model.sharingPaused, "The other Mac can lift this Mac's pause")
+        model.handleReceiverMessage("{\"command\":\"stop\",\"peerID\":\"test-peer\",\"peerName\":\"Display Mac\",\"sharingEnabled\":false}")
+        assert(model.sharingEnabled && model.sharingPaused, "A pause on the other Mac shows as paused here")
+        model.toggleSharing()
+        assert(model.sharingEnabled, "Resume here asks the other Mac to resume")
+        model.peerSharingEnabled = true
+        model.toggleSharing()
+        assert(!model.sharingEnabled)
         assert(model.audioEnabled)
         model.configured = true
         model.cursorScale = 1.3; model.cursorHue = 0.4
