@@ -131,8 +131,21 @@ func h264HardwareEncoderAvailable(width: Int, height: Int) -> Bool {
 
 func receiverDisplaySize() -> SharpDisplaySize {
     let display = CGMainDisplayID()
-    return SharpDisplaySize(width: max(640, CGDisplayPixelsWide(display)),
-                            height: max(360, CGDisplayPixelsHigh(display)))
+    // CGDisplayPixelsWide reports points on a Retina panel. A 5K iMac at its
+    // default size is 2560×1440 points and a 5120×2880 framebuffer.
+    var width = CGDisplayPixelsWide(display)
+    var height = CGDisplayPixelsHigh(display)
+    if let mode = CGDisplayCopyDisplayMode(display) {
+        let pixelsWide = mode.pixelWidth
+        let pixelsHigh = mode.pixelHeight
+        if pixelsWide >= 2 && pixelsHigh >= 2 {
+            width = pixelsWide
+            height = pixelsHigh
+        }
+    }
+    if width % 2 != 0 { width -= 1 }
+    if height % 2 != 0 { height -= 1 }
+    return SharpDisplaySize(width: max(640, width), height: max(360, height))
 }
 
 var sharpVersion: String {

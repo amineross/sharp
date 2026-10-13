@@ -134,6 +134,7 @@ extension SharpModel {
         }
         line.start()
         let display = receiverDisplaySize()
+        trace("reporting display \(display.width)x\(display.height)")
         line.send(ControlMessage(command: "display", peerID: peerID,
                                  peerName: Host.current().localizedName ?? "Mac",
                                  width: display.width, height: display.height, sharingEnabled: sharingEnabled, audioSupported: true))
@@ -427,6 +428,7 @@ extension SharpModel {
             peerName = message.peerName
             status = "Paused"
             peerDisplaySize = SharpDisplaySize(width: width, height: height)
+            trace("panel \(width)x\(height)")
             peerSupportsAudio = message.audioSupported == true
             runProbes()
             sendStartRequest()
