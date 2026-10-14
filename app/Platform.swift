@@ -131,17 +131,20 @@ func h264HardwareEncoderAvailable(width: Int, height: Int) -> Bool {
 
 func receiverDisplaySize() -> SharpDisplaySize {
     let display = CGMainDisplayID()
-    // CGDisplayPixelsWide reports points on a Retina panel. A 5K iMac at its
-    // default size is 2560×1440 points and a 5120×2880 framebuffer.
+    // CGDisplayPixelsWide reports points, and the current mode's pixel size is
+    // its backing store: a 5K iMac set to More Space renders 6400×3600. The
+    // panel itself is the mode macOS flags as native.
     var width = CGDisplayPixelsWide(display)
     var height = CGDisplayPixelsHigh(display)
-    if let mode = CGDisplayCopyDisplayMode(display) {
-        let pixelsWide = mode.pixelWidth
-        let pixelsHigh = mode.pixelHeight
-        if pixelsWide >= 2 && pixelsHigh >= 2 {
-            width = pixelsWide
-            height = pixelsHigh
-        }
+    let options = [kCGDisplayShowDuplicateLowResolutionModes as String: true] as CFDictionary
+    let modes = (CGDisplayCopyAllDisplayModes(display, options) as? [CGDisplayMode]) ?? []
+    let kDisplayModeNativeFlag: UInt32 = 0x0200_0000
+    if let native = modes.first(where: { $0.ioFlags & kDisplayModeNativeFlag != 0 }) {
+        width = native.pixelWidth
+        height = native.pixelHeight
+    } else if let mode = CGDisplayCopyDisplayMode(display), mode.pixelWidth >= 2, mode.pixelHeight >= 2 {
+        width = mode.pixelWidth
+        height = mode.pixelHeight
     }
     if width % 2 != 0 { width -= 1 }
     if height % 2 != 0 { height -= 1 }

@@ -1,6 +1,8 @@
 CC = clang
 BUILD ?= build
 ARCHS ?= -arch arm64 -arch x86_64
+# Releases are signed with the maintainer's certificate (SIGN_IDENTITY=<sha1>) so
+# macOS keeps Screen Recording across updates. Ad-hoc (-) is fine locally.
 SIGN_IDENTITY ?= -
 CPPFLAGS = -Iinclude -Ithird_party/zstd
 CFLAGS = -O2 -g -Wall -Wextra -MMD -MP

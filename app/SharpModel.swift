@@ -284,6 +284,8 @@ final class SharpModel: ObservableObject {
 
     var connectionDetail: String {
         if connectionStatus == .disconnected { return "No Mac connected" }
+        // macOS resets the permission when Sharp updates; say so instead of "Connected".
+        if needsScreenPermission { return "Allow Screen Recording to start sharing" }
         let name = peerName.isEmpty ? "Waiting for the other Mac" : peerName
         return activeLinkLabel.map { "\(name) · \($0)" } ?? name
     }
@@ -327,6 +329,10 @@ final class SharpModel: ObservableObject {
     func requestScreenPermission() {
         guard role == .sender else { return }
         saveRoleChoice()
+        // An entry granted to an older build still shows as on but no longer
+        // matches this one; toggling it does nothing. Clear Sharp's own entry
+        // so macOS asks again and the user only has to switch it on.
+        if configured && needsScreenPermission { _ = run(URL(fileURLWithPath: "/usr/bin/tccutil"), ["reset", "ScreenCapture", "sh.sharp.app"]) }
         let result = run(senderURL, ["--check-permission", "--request-permission"])
         if result.code == 0 {
             runProbes()

@@ -212,15 +212,19 @@ static BOOL wiredAddress(NSString *ip) {
     for (NSStream *stream in @[self.input,self.output]) {
         stream.delegate=self; [stream scheduleInRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes]; [stream open];
     }
-    /* CGDisplayPixelsWide counts points; a 5K iMac would report 2560×1440. */
+    /* CGDisplayPixelsWide counts points, and the current mode's pixel size is
+     * its backing store (6400×3600 for a 5K iMac set to More Space). The
+     * panel itself is the mode macOS flags as native. */
     size_t width=CGDisplayPixelsWide(CGMainDisplayID()), height=CGDisplayPixelsHigh(CGMainDisplayID());
-    CGDisplayModeRef mode=CGDisplayCopyDisplayMode(CGMainDisplayID());
-    if(mode) {
-        if(CGDisplayModeGetPixelWidth(mode)>=2 && CGDisplayModeGetPixelHeight(mode)>=2) {
-            width=CGDisplayModeGetPixelWidth(mode); height=CGDisplayModeGetPixelHeight(mode);
+    NSDictionary *options=@{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes:@YES};
+    CFArrayRef modes=CGDisplayCopyAllDisplayModes(CGMainDisplayID(),(__bridge CFDictionaryRef)options);
+    for(CFIndex i=0; modes && i<CFArrayGetCount(modes); i++) {
+        CGDisplayModeRef mode=(CGDisplayModeRef)CFArrayGetValueAtIndex(modes,i);
+        if(CGDisplayModeGetIOFlags(mode) & 0x02000000u) {
+            width=CGDisplayModeGetPixelWidth(mode); height=CGDisplayModeGetPixelHeight(mode); break;
         }
-        CGDisplayModeRelease(mode);
     }
+    if(modes) CFRelease(modes);
     width&=~(size_t)1; height&=~(size_t)1;
     [self send:@{@"command":@"display", @"width":@(MAX(640,width)), @"height":@(MAX(360,height)),
                 @"sharingEnabled":@YES, @"audioSupported":@YES}];

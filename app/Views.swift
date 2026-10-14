@@ -201,12 +201,19 @@ struct CursorPreview: View {
 struct PermissionView: View {
     @EnvironmentObject var model: SharpModel
     let dismiss: () -> Void
+    private let recheck = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Sharp").font(.system(size: 27, weight: .semibold))
             HStack(spacing: 10) {
                 SharpRoleCard(role: .sender, selected: model.role == .sender) { model.role = .sender; model.runProbes() }
                 SharpRoleCard(role: .receiver, selected: model.role == .receiver) { model.role = .receiver; model.runProbes() }
+            }
+            if model.role == .sender && model.configured && model.needsScreenPermission {
+                // macOS drops the grant when Sharp updates, yet still shows the
+                // switch as on. Say what to do instead of letting it look broken.
+                Text("macOS turned off Screen Recording for this new version of Sharp. Click Screen Recording, then switch Sharp on in System Settings. Sharp continues by itself.")
+                    .font(.system(size: 13)).foregroundColor(SharpColor.dim).fixedSize(horizontal: false, vertical: true)
             }
             if model.role == .sender {
                 permission("Screen Recording", symbol: "rectangle.on.rectangle", granted: !model.needsScreenPermission) {
@@ -231,6 +238,12 @@ struct PermissionView: View {
         .padding(24).frame(width: 580)
         .background(SharpColor.bg).foregroundColor(SharpColor.fg)
         .onAppear { model.runProbes(); model.requestLocalNetworkAccess() }
+        .onReceive(recheck) { _ in
+            // Pick the grant up as soon as it is made, without a reopen.
+            guard model.role == .sender, model.needsScreenPermission else { return }
+            model.refreshAfterActivation()
+            if model.configured && !model.needsScreenPermission { dismiss() }
+        }
     }
     private func permission(_ title: String, symbol: String, granted: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
