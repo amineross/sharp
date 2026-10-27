@@ -75,8 +75,12 @@ $(APP)/Contents/MacOS/Sharp: $(SWIFT) app/Info.plist $(BUILD)/CursorImage.o $(BU
 	cp $(BUILD)/SharpSender $(BUILD)/SharpReceiver $(BUILD)/SharpWatchdog $(BUILD)/SharpBenchmarkScene $(APP)/Contents/Helpers/
 	cp $(BUILD)/Sharp.icns $(BUILD)/SharpStatus.png $(APP)/Contents/Resources/
 	ditto resources/Cursors $(APP)/Contents/Resources/Cursors
-	swiftc -target arm64-apple-macosx11.0 -parse-as-library -import-objc-header app/SharpAudio.h $(SWIFT) $(BUILD)/SharpAudio.o $(BUILD)/CursorImage.o -framework CoreAudio -framework AudioToolbox -o $(BUILD)/Sharp-arm64
-	swiftc -target x86_64-apple-macosx10.15 -parse-as-library -import-objc-header app/SharpAudio.h $(SWIFT) $(BUILD)/SharpAudio.o $(BUILD)/CursorImage.o -framework CoreAudio -framework AudioToolbox -o $(BUILD)/Sharp-x86_64
+	# macOS 10.15 and 11 lack the Swift concurrency runtime, so bundle it (the OS copy wins on 12+)
+	mkdir -p $(APP)/Contents/Frameworks
+	cp $(shell xcode-select -p)/usr/lib/swift-5.5/macosx/libswift_Concurrency.dylib $(APP)/Contents/Frameworks/
+	codesign --force --sign "$(SIGN_IDENTITY)" $(APP)/Contents/Frameworks/libswift_Concurrency.dylib
+	swiftc -target arm64-apple-macosx11.0 -parse-as-library -import-objc-header app/SharpAudio.h $(SWIFT) $(BUILD)/SharpAudio.o $(BUILD)/CursorImage.o -framework CoreAudio -framework AudioToolbox -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o $(BUILD)/Sharp-arm64
+	swiftc -target x86_64-apple-macosx10.15 -parse-as-library -import-objc-header app/SharpAudio.h $(SWIFT) $(BUILD)/SharpAudio.o $(BUILD)/CursorImage.o -framework CoreAudio -framework AudioToolbox -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o $(BUILD)/Sharp-x86_64
 	lipo -create $(BUILD)/Sharp-arm64 $(BUILD)/Sharp-x86_64 -output $@
 	codesign --force --sign "$(SIGN_IDENTITY)" --identifier sh.sharp.app.sender $(APP)/Contents/Helpers/SharpSender
 	codesign --force --sign "$(SIGN_IDENTITY)" --identifier sh.sharp.app.receiver $(APP)/Contents/Helpers/SharpReceiver
