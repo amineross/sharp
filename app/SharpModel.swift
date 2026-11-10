@@ -258,7 +258,7 @@ final class SharpModel: ObservableObject {
         control?.send(ControlMessage(command: "stop", peerID: peerID,
             peerName: Host.current().localizedName ?? "Mac", sharingEnabled: false))
         stopSender(); stopReceiver()
-        status = isPeerConnected ? "Paused" : "Connect an Ethernet or Thunderbolt cable"
+        status = isPeerConnected ? "Paused" : "Connect an Ethernet, Thunderbolt or USB cable"
     }
 
     /// Resumes this Mac and, unless the request came from the other Mac,
@@ -461,7 +461,7 @@ final class SharpModel: ObservableObject {
                           title: "Packaged engines", detail: helpers ? "Sender and receiver are included" : "Sharp is incomplete; reinstall the app"))
         let links = activeDirectInterfaces().filter { pinnedInterface.isEmpty || $0.interface.name == pinnedInterface }
         next.append(.init(id: "ethernet", level: links.isEmpty ? .warning : .pass, title: "Direct link",
-                          detail: links.isEmpty ? "Connect an Ethernet or Thunderbolt cable"
+                          detail: links.isEmpty ? "Connect an Ethernet, Thunderbolt or USB cable"
                               : links.map { "\($0.interface.displayName) · \($0.interface.name) (\($0.address))" }.joined(separator: ", ")))
         if let slow = links.first(where: { $0.interface.kind == .ethernet && (linkSpeed(interfaceName: $0.interface.name) ?? .max) <= 150_000_000 }) {
             next.append(.init(id: "speed", level: .warning, title: "Link speed",
@@ -638,8 +638,8 @@ final class SharpModel: ObservableObject {
     func directPathProblem(_ path: NWPath?) -> String? {
         guard let path, let address = directIPv4Address(for: path) else {
             return path?.usesInterfaceType(.wifi) == true
-                ? "Sharp needs Ethernet or Thunderbolt, not Wi-Fi"
-                : "Connect both Macs with Ethernet or Thunderbolt"
+                ? "Sharp needs Ethernet, Thunderbolt or USB, not Wi-Fi"
+                : "Connect both Macs with Ethernet, Thunderbolt or USB"
         }
         if !pinnedInterface.isEmpty && ipv4Address(interfaceName: pinnedInterface) != address {
             return "The selected connection is not linked to this Mac"

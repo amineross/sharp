@@ -534,7 +534,7 @@ struct SharpAdvancedView: View {
                         Text(interfaceLabel(name)).tag(name)
                     }
                 }.labelsHidden()
-                Text("Automatic prefers Thunderbolt, then a direct Ethernet cable.").font(.system(size: 11)).foregroundColor(SharpColor.dim)
+                Text("Automatic prefers Thunderbolt, then a direct Ethernet or USB cable.").font(.system(size: 11)).foregroundColor(SharpColor.dim)
             }
 
             if model.role == .sender {

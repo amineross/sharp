@@ -38,6 +38,27 @@
 @property double cursorScale, cursorHue;
 @end
 
+// A USB cable from an Apple silicon Mac: macOS hosts its NCM network device but
+// never lists the interface among its network services. Same rule as the app's
+// macUSBLinkSpeed.
+static BOOL macUSBLink(const char *name) {
+    io_registry_entry_t entry = IOServiceGetMatchingService(kIOMasterPortDefault, IOBSDNameMatching(kIOMasterPortDefault, 0, name));
+    BOOL found = NO;
+    for (int depth = 0; entry && depth < 8 && !found; depth++) {
+        if (IOObjectConformsTo(entry, "IOUSBHostDevice")) {
+            NSNumber *vendor = CFBridgingRelease(IORegistryEntryCreateCFProperty(entry, CFSTR("idVendor"), kCFAllocatorDefault, 0));
+            found = vendor.intValue == 0x05ac;
+            break;
+        }
+        io_registry_entry_t parent = 0;
+        kern_return_t status = IORegistryEntryGetParentEntry(entry, kIOServicePlane, &parent);
+        IOObjectRelease(entry);
+        entry = status == KERN_SUCCESS ? parent : 0;
+    }
+    if (entry) IOObjectRelease(entry);
+    return found;
+}
+
 static BOOL wiredAddress(NSString *ip) {
     if ([NSProcessInfo.processInfo.environment[@"SHARP_RECEIVER_TEST_LOOPBACK"] isEqual:@"1"] &&
         [ip isEqual:@"127.0.0.1"]) return YES;
@@ -61,7 +82,7 @@ static BOOL wiredAddress(NSString *ip) {
     if (getifaddrs(&addresses) == 0) {
         for (struct ifaddrs *a = addresses; a; a = a->ifa_next) {
             if (!a->ifa_addr || a->ifa_addr->sa_family != AF_INET || !(a->ifa_flags & IFF_UP) ||
-                ![names containsObject:@(a->ifa_name)]) continue;
+                (![names containsObject:@(a->ifa_name)] && !macUSBLink(a->ifa_name))) continue;
             char address[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &((struct sockaddr_in *)a->ifa_addr)->sin_addr, address, sizeof(address));
             if ([ip isEqual:@(address)]) { found = YES; break; }
@@ -122,7 +143,7 @@ static NSTextField *SharpLabel(NSString *text, BOOL wraps) {
     self.titleLabel.font = [NSFont systemFontOfSize:21 weight:NSFontWeightMedium];
     self.titleLabel.alignment = NSTextAlignmentCenter;
     [self.window.contentView addSubview:self.titleLabel];
-    self.detailLabel = SharpLabel(@"Connect Ethernet or Thunderbolt and open Sharp on your other Mac.", YES);
+    self.detailLabel = SharpLabel(@"Connect Ethernet, Thunderbolt or USB and open Sharp on your other Mac.", YES);
     self.detailLabel.frame = NSMakeRect(32,73,356,44);
     self.detailLabel.font = [NSFont systemFontOfSize:13];
     self.detailLabel.textColor = NSColor.secondaryLabelColor;
@@ -202,11 +223,11 @@ static NSTextField *SharpLabel(NSString *text, BOOL wraps) {
         // Tell the sender why, so it explains instead of retrying blindly.
         NSString *name = NSHost.currentHost.localizedName ?: @"The display Mac";
         NSDictionary *m = @{@"command":@"rejected", @"peerID":self.peerID, @"peerName":name,
-            @"reason":[NSString stringWithFormat:@"%@ can’t use this network link. Connect the Macs with Ethernet or Thunderbolt.", name]};
+            @"reason":[NSString stringWithFormat:@"%@ can’t use this network link. Connect the Macs with Ethernet, Thunderbolt or USB.", name]};
         NSMutableData *line = [[NSJSONSerialization dataWithJSONObject:m options:0 error:nil] mutableCopy];
         [line appendBytes:"\n" length:1];
         (void)write(fd, line.bytes, line.length);
-        [self record:[NSString stringWithFormat:@"Rejected connection on %s: not Ethernet or Thunderbolt", ip]];
+        [self record:[NSString stringWithFormat:@"Rejected connection on %s: not Ethernet, Thunderbolt or USB", ip]];
         close(fd); return;
     }
     int one=1; setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,&one,sizeof(one));
@@ -329,7 +350,7 @@ static NSTextField *SharpLabel(NSString *text, BOOL wraps) {
     }
     self.input=nil; self.output=nil; self.incoming=nil; self.outgoing=nil;
     [self stopEngine];
-    [self status:@"Waiting for your Mac…" detail:@"Connect Ethernet or Thunderbolt and open Sharp on your other Mac."];
+    [self status:@"Waiting for your Mac…" detail:@"Connect Ethernet, Thunderbolt or USB and open Sharp on your other Mac."];
     if(!self.terminating && !self.sleeping) [self.window orderFront:nil];
 }
 - (void)tick:(id)sender {

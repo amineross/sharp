@@ -86,6 +86,10 @@ extension SharpModel {
             lossless = verifiedHybrid ? 1500 : 120
         } else if let speed, speed <= 150_000_000 {
             lossless = 60; cap = 30_000_000; minimum = 8_000_000
+        } else if verifiedHybrid, let speed, speed < 1_000_000_000 {
+            // USB 2.0 signals 480 Mb/s but carries about 330.
+            lossless = Int(speed / 2_000_000)
+            cap = min(cap, Int(speed / 5))
         }
         trace("link \(linkName ?? "unknown") \(link?.kind.rawValue ?? "unknown") speed=\(speed.map { "\($0 / 1_000_000)Mb/s" } ?? "unknown") lossless=\(lossless)Mb/s video_max=\(cap / 1_000_000)Mb/s")
         let losslessMbps = ProcessInfo.processInfo.environment["SHARP_LOSSLESS_MBPS"] ?? "\(lossless)"

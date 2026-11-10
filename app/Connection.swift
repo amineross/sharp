@@ -31,7 +31,7 @@ extension SharpModel {
                     case .ready:
                         if self.control == nil, !self.localSleeping {
                             self.linkState = self.peerReportedSleep ? .sleeping : .waiting
-                            self.status = "Connect an Ethernet or Thunderbolt cable"
+                            self.status = "Connect an Ethernet, Thunderbolt or USB cable"
                         }
                     case .waiting(let error):
                         if self.isLocalNetworkDenied(error) {
@@ -95,8 +95,8 @@ extension SharpModel {
     /// Tell the sender why before closing, so it can explain instead of retrying blindly.
     func reject(_ connection: NWConnection, wifi: Bool) {
         let name = Host.current().localizedName ?? "The display Mac"
-        let reason = wifi ? "\(name) is reachable only over Wi-Fi. Connect the Macs with Ethernet or Thunderbolt."
-                          : "\(name) can’t use this network link. Connect the Macs with Ethernet or Thunderbolt."
+        let reason = wifi ? "\(name) is reachable only over Wi-Fi. Connect the Macs with Ethernet, Thunderbolt or USB."
+                          : "\(name) can’t use this network link. Connect the Macs with Ethernet, Thunderbolt or USB."
         guard var data = try? JSONEncoder().encode(ControlMessage(command: "rejected", peerID: peerID, peerName: name, reason: reason)) else {
             connection.cancel(); return
         }
@@ -294,6 +294,7 @@ extension SharpModel {
     private func linkRank(_ name: String, _ direct: [String: SharpDirectInterface]) -> Int {
         guard let link = direct[name] else { return 3 }
         if link.kind == .thunderbolt { return 0 }
+        if link.kind == .usb { return (linkSpeed(interfaceName: link.name) ?? 0) >= 2_500_000_000 ? 0 : 2 }
         return ipv4Address(interfaceName: link.name)?.hasPrefix("169.254.") == true ? 1 : 2
     }
 

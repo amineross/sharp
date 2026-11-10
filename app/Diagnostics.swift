@@ -49,7 +49,7 @@ extension SharpModel {
         Direct links
         """
         let links = activeDirectInterfaces()
-        if links.isEmpty { report += "No Ethernet or Thunderbolt link with an IPv4 address\n" }
+        if links.isEmpty { report += "No Ethernet, Thunderbolt or USB link with an IPv4 address\n" }
         for link in links {
             report += "\n\(link.interface.displayName)\n\(run(URL(fileURLWithPath: "/sbin/ifconfig"), [link.interface.name]).output)"
         }

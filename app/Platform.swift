@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import CryptoKit
+import IOKit
 import Network
 import ServiceManagement
 import SwiftUI
@@ -12,9 +13,11 @@ import VideoToolbox
 enum SharpLinkKind: String {
     case ethernet = "Ethernet"
     case thunderbolt = "Thunderbolt"
+    case usb = "USB"
 }
 
-/// A cable Sharp may stream over: a wired Ethernet adapter or Thunderbolt Bridge.
+/// A cable Sharp may stream over: a wired Ethernet adapter, Thunderbolt Bridge,
+/// or a USB cable between two Macs.
 struct SharpDirectInterface: Equatable {
     let name: String
     let displayName: String
@@ -25,7 +28,7 @@ struct SharpDirectInterface: Equatable {
 /// Thunderbolt ports. Those member ports report as Ethernet but never carry an
 /// address, so they drop out once an IPv4 address is required.
 func directInterfaces() -> [SharpDirectInterface] {
-    (SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] ?? []).compactMap { interface -> SharpDirectInterface? in
+    let configured = (SCNetworkInterfaceCopyAll() as? [SCNetworkInterface] ?? []).compactMap { interface -> SharpDirectInterface? in
         guard let name = SCNetworkInterfaceGetBSDName(interface) as String?,
               let type = SCNetworkInterfaceGetInterfaceType(interface) as String? else { return nil }
         let displayName = SCNetworkInterfaceGetLocalizedDisplayName(interface) as String? ?? name
@@ -38,8 +41,58 @@ func directInterfaces() -> [SharpDirectInterface] {
         // iPhone and iPad tethering also report as Ethernet.
         guard type == kSCNetworkInterfaceTypeEthernet as String,
               !displayName.hasPrefix("iPhone"), !displayName.hasPrefix("iPad") else { return nil }
-        return SharpDirectInterface(name: name, displayName: displayName, kind: .ethernet)
-    }.sorted { $0.name < $1.name }
+        let usb = macUSBLinkSpeed(interfaceName: name) != nil
+        return SharpDirectInterface(name: name, displayName: usb ? "USB" : displayName, kind: usb ? .usb : .ethernet)
+    }
+    // The Mac hosting the USB link gets an interface macOS never adds to its
+    // network services, so look for it directly.
+    let known = Set(configured.map(\.name))
+    var pointer: UnsafeMutablePointer<ifaddrs>?
+    var usb: [SharpDirectInterface] = []
+    if getifaddrs(&pointer) == 0, let first = pointer {
+        for item in sequence(first: first, next: { $0.pointee.ifa_next })
+        where item.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_LINK) {
+            let name = String(cString: item.pointee.ifa_name)
+            if name.hasPrefix("en"), !known.contains(name), !usb.contains(where: { $0.name == name }),
+               macUSBLinkSpeed(interfaceName: name) != nil {
+                usb.append(SharpDirectInterface(name: name, displayName: "USB", kind: .usb))
+            }
+        }
+        freeifaddrs(pointer)
+    }
+    return (configured + usb).sorted { $0.name < $1.name }
+}
+
+/// The negotiated rate of a USB cable between two Macs, or nil for any other
+/// interface. Apple silicon presents a USB network device (NCM) on its USB-C
+/// ports; the other Mac's built-in NCM driver hosts it. Both ends report 100 Mb/s
+/// Ethernet whatever the cable carries.
+func macUSBLinkSpeed(interfaceName: String) -> UInt64? {
+    var entry = IOServiceGetMatchingService(0, IOBSDNameMatching(0, 0, interfaceName))
+    guard entry != 0 else { return nil }
+    var deviceMode = false
+    for _ in 0..<8 {
+        if IOObjectConformsTo(entry, "AppleUSBDeviceNCMData") != 0 { deviceMode = true }
+        let host = IOObjectConformsTo(entry, "IOUSBHostDevice") != 0
+        let speedKey = deviceMode ? "ActiveSpeed" : host ? "Device Speed" : nil
+        if let speedKey,
+           let speed = IORegistryEntryCreateCFProperty(entry, speedKey as CFString, kCFAllocatorDefault, 0)?
+               .takeRetainedValue() as? Int {
+            let vendor = IORegistryEntryCreateCFProperty(entry, "idVendor" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? Int
+            IOObjectRelease(entry)
+            guard deviceMode || vendor == 0x05ac else { return nil }
+            // IOUSBFamily speeds: 2 high, 3 SuperSpeed, 4 SuperSpeed+.
+            return [2: 480_000_000, 3: 5_000_000_000, 4: 10_000_000_000][speed] ?? 480_000_000
+        }
+        var parent: io_registry_entry_t = 0
+        let status = IORegistryEntryGetParentEntry(entry, kIOServicePlane, &parent)
+        IOObjectRelease(entry)
+        guard status == KERN_SUCCESS else { return nil }
+        entry = parent
+    }
+    IOObjectRelease(entry)
+    return nil
 }
 
 func directInterface(named name: String?) -> SharpDirectInterface? {
@@ -75,6 +128,7 @@ func directIPv4Address(for path: NWPath?) -> String? {
 
 /// Negotiated link speed in bits per second; nil when the driver does not report one.
 func linkSpeed(interfaceName: String) -> UInt64? {
+    if let usb = macUSBLinkSpeed(interfaceName: interfaceName) { return usb }
     var pointer: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&pointer) == 0, let first = pointer else { return nil }
     defer { freeifaddrs(pointer) }
