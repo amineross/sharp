@@ -1,14 +1,14 @@
 SHARP ?= ..
 BUILD = build
 APP = $(BUILD)/Sharp Receiver.app
-FLAGS = -arch x86_64 -mmacosx-version-min=10.13 -O2 -fobjc-arc -Wall -Wextra -Werror=unguarded-availability -Werror=unguarded-availability-new
+FLAGS = -arch x86_64 -mmacosx-version-min=10.11 -O2 -fobjc-arc -Wall -Wextra -Werror=unguarded-availability -Werror=unguarded-availability-new
 
 .PHONY: all engine installer test
 all: engine
 	$(MAKE) $(BUILD)/receiver.stamp
 
 engine:
-	$(MAKE) -C $(SHARP) BUILD="$(CURDIR)/$(BUILD)/engine" ARCHS='-arch x86_64' MACFLAGS='-mmacosx-version-min=10.13 -Werror=unguarded-availability -Werror=unguarded-availability-new' "$(CURDIR)/$(BUILD)/engine/SharpReceiver"
+	$(MAKE) -C $(SHARP) BUILD="$(CURDIR)/$(BUILD)/engine" ARCHS='-arch x86_64' MACFLAGS='-mmacosx-version-min=10.11 -Werror=unguarded-availability -Werror=unguarded-availability-new' "$(CURDIR)/$(BUILD)/engine/SharpReceiver"
 	$(MAKE) -C $(SHARP) build/Sharp.icns
 
 $(BUILD)/receiver.stamp: ReceiverApp.m Info.plist $(SHARP)/app/SharpAudio.m $(BUILD)/engine/SharpReceiver $(SHARP)/build/Sharp.icns

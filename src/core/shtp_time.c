@@ -1,12 +1,19 @@
 #include "sharp/shtp_time.h"
 
 #include <errno.h>
+#include <mach/mach_time.h>
 #include <time.h>
 
 uint64_t shtp_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    if (__builtin_available(macOS 10.12, *)) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    }
+    /* El Capitan has no clock_gettime. */
+    static mach_timebase_info_data_t timebase;
+    if (timebase.denom == 0) mach_timebase_info(&timebase);
+    return mach_absolute_time() * timebase.numer / timebase.denom;
 }
 
 void shtp_sleep_until_ns(uint64_t deadline_ns) {

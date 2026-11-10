@@ -1,6 +1,6 @@
 # Sharp Receiver for High Sierra
 
-Experimental Intel receiver for macOS 10.13.6. Install normal Sharp on the sending Mac.
+Experimental Intel receiver for macOS 10.11 El Capitan through 10.13 High Sierra. Install normal Sharp on the sending Mac. El Capitan builds compile but are untested on El Capitan hardware.
 
 ## Install
 

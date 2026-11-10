@@ -33,7 +33,8 @@ static uint64_t nowNS(void) {
     static mach_timebase_info_data_t tb;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ mach_timebase_info(&tb); });
-    return mach_continuous_time()*tb.numer/tb.denom;
+    if (@available(macOS 10.12, *)) return mach_continuous_time()*tb.numer/tb.denom;
+    return mach_absolute_time()*tb.numer/tb.denom;
 }
 static uint32_t putFrames(AudioRing *r, const float *samples, uint32_t n) {
     uint64_t w=atomic_load_explicit(&r->written,memory_order_relaxed);

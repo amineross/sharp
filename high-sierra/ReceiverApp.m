@@ -71,6 +71,15 @@ static BOOL wiredAddress(NSString *ip) {
     return found;
 }
 
+// NSTextField's label constructors need macOS 10.12; this receiver runs on 10.11.
+static NSTextField *SharpLabel(NSString *text, BOOL wraps) {
+    NSTextField *label = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    label.stringValue = text; label.bezeled = NO; label.drawsBackground = NO;
+    label.editable = NO; label.selectable = NO;
+    label.cell.wraps = wraps; label.cell.lineBreakMode = wraps ? NSLineBreakByWordWrapping : NSLineBreakByTruncatingTail;
+    return label;
+}
+
 @implementation ReceiverApp
 - (void)status:(NSString *)title detail:(NSString *)detail {
     self.titleLabel.stringValue = title;
@@ -108,19 +117,21 @@ static BOOL wiredAddress(NSString *ip) {
     NSImageView *icon = [[NSImageView alloc] initWithFrame:NSMakeRect(170,166,80,80)];
     icon.image = [NSImage imageNamed:NSImageNameApplicationIcon];
     [self.window.contentView addSubview:icon];
-    self.titleLabel = [NSTextField labelWithString:@"Waiting for your Mac…"];
+    self.titleLabel = SharpLabel(@"Waiting for your Mac…", NO);
     self.titleLabel.frame = NSMakeRect(20,119,380,30);
     self.titleLabel.font = [NSFont systemFontOfSize:21 weight:NSFontWeightMedium];
     self.titleLabel.alignment = NSTextAlignmentCenter;
     [self.window.contentView addSubview:self.titleLabel];
-    self.detailLabel = [NSTextField wrappingLabelWithString:@"Connect Ethernet or Thunderbolt and open Sharp on your other Mac."];
+    self.detailLabel = SharpLabel(@"Connect Ethernet or Thunderbolt and open Sharp on your other Mac.", YES);
     self.detailLabel.frame = NSMakeRect(32,73,356,44);
     self.detailLabel.font = [NSFont systemFontOfSize:13];
     self.detailLabel.textColor = NSColor.secondaryLabelColor;
     self.detailLabel.alignment = NSTextAlignmentCenter;
     [self.window.contentView addSubview:self.detailLabel];
-    NSTextField *credit = [NSTextField labelWithString:[NSString stringWithFormat:@"Sharp %@ by Amine Rostane", version]];
-    self.resumeButton = [NSButton buttonWithTitle:@"Resume" target:self action:@selector(resume:)];
+    NSTextField *credit = SharpLabel([NSString stringWithFormat:@"Sharp %@ by Amine Rostane", version], NO);
+    self.resumeButton = [NSButton new];
+    self.resumeButton.title = @"Resume"; self.resumeButton.bezelStyle = NSBezelStyleRounded;
+    self.resumeButton.target = self; self.resumeButton.action = @selector(resume:);
     self.resumeButton.frame = NSMakeRect(160,36,100,30); self.resumeButton.hidden = YES;
     [self.window.contentView addSubview:self.resumeButton];
     credit.frame = NSMakeRect(20,10,380,20); credit.alignment = NSTextAlignmentCenter;
@@ -480,9 +491,9 @@ static BOOL wiredAddress(NSString *ip) {
         s.resumeButton.hidden = NO;
         [s.window orderFront:nil];
     }); };
-    NSError *error=nil;
-    if(![task launchAndReturnError:&error]) {
-        [self record:error.description]; [self disconnect:@"display could not start"];
+    @try { [task launch]; }
+    @catch (NSException *exception) {
+        [self record:exception.reason ?: exception.name]; [self disconnect:@"display could not start"];
         [self status:@"Could not start the display" detail:@"Open report from the Sharp Receiver menu."]; return;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,8*NSEC_PER_SEC),dispatch_get_main_queue(),^{

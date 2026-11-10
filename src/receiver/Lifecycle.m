@@ -12,12 +12,17 @@ static void sharp_receiver_startup_failed(void) {
 static void sharp_hide_idle_local_cursor(void) {
     __block NSPoint last = [NSEvent mouseLocation];
     __block NSUInteger idleTicks = 0;
-    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
-        (void)timer;
+    /* A dispatch timer instead of the NSTimer block API keeps El Capitan building. */
+    static dispatch_source_t timer;
+    timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC,
+                              NSEC_PER_SEC / 10);
+    dispatch_source_set_event_handler(timer, ^{
         NSPoint now = [NSEvent mouseLocation];
         if (!NSEqualPoints(now, last)) { last = now; idleTicks = 0; return; }
         if (++idleTicks >= 2 && NSApp.isActive) [NSCursor setHiddenUntilMouseMoves:YES];
-    }];
+    });
+    dispatch_resume(timer);
 }
 
 @implementation SharpDisplayApp

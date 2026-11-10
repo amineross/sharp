@@ -15,7 +15,8 @@ int main(int argc, char **argv) {
             NSOpenGLPixelFormat *format =
                 [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
             int gl32 = format != nil;
-            int h264 = VTIsHardwareDecodeSupported(kCMVideoCodecType_H264);
+            int h264 = -1;
+            if (@available(macOS 10.13, *)) h264 = VTIsHardwareDecodeSupported(kCMVideoCodecType_H264);
             fprintf(stdout, "sharp-compat renderer_gl32=%d h264_hw_decode=%d\n",
                     gl32, h264);
             return gl32 ? 0 : 4;
