@@ -131,24 +131,13 @@ func h264HardwareEncoderAvailable(width: Int, height: Int) -> Bool {
 
 func receiverDisplaySize() -> SharpDisplaySize {
     let display = CGMainDisplayID()
-    // CGDisplayPixelsWide reports points, and the current mode's pixel size is
-    // its backing store: a 5K iMac set to More Space renders 6400×3600. The
-    // panel itself is the mode macOS flags as native.
-    var width = CGDisplayPixelsWide(display)
-    var height = CGDisplayPixelsHigh(display)
     let options = [kCGDisplayShowDuplicateLowResolutionModes as String: true] as CFDictionary
     let modes = (CGDisplayCopyAllDisplayModes(display, options) as? [CGDisplayMode]) ?? []
-    let kDisplayModeNativeFlag: UInt32 = 0x0200_0000
-    if let native = modes.first(where: { $0.ioFlags & kDisplayModeNativeFlag != 0 }) {
-        width = native.pixelWidth
-        height = native.pixelHeight
-    } else if let mode = CGDisplayCopyDisplayMode(display), mode.pixelWidth >= 2, mode.pixelHeight >= 2 {
-        width = mode.pixelWidth
-        height = mode.pixelHeight
-    }
-    if width % 2 != 0 { width -= 1 }
-    if height % 2 != 0 { height -= 1 }
-    return SharpDisplaySize(width: max(640, width), height: max(360, height))
+    let current = CGDisplayCopyDisplayMode(display)
+    return SharpDisplaySize.panel(
+        modes: modes.map { ($0.width, $0.pixelWidth, $0.pixelHeight, $0.ioFlags) },
+        current: current.map { ($0.pixelWidth, $0.pixelHeight) }
+            ?? (CGDisplayPixelsWide(display), CGDisplayPixelsHigh(display)))
 }
 
 var sharpVersion: String {

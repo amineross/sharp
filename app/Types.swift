@@ -29,7 +29,9 @@ enum SharpResolution: String, CaseIterable, Identifiable, Codable {
     static let testedPixelBudget = 2560 * 1440
 
     static func testedDefault(for target: SharpDisplaySize) -> SharpResolution {
-        allCases.first(where: {
+        // A Retina panel looks right only at its own size, drawn at 2×.
+        if native.usesRetina(for: target) && native.isSupported(for: target) { return .native }
+        return allCases.first(where: {
             let size = $0.size(for: target)
             return size.0 * size.1 <= testedPixelBudget && $0.isSupported(for: target)
         }) ?? .performance
@@ -188,6 +190,20 @@ enum SharpResolution: String, CaseIterable, Identifiable, Codable {
 struct SharpDisplaySize: Equatable, Codable {
     let width: Int
     let height: Int
+
+    // The panel is the largest mode that is native or drawn at 1x. 5K iMacs flag
+    // no mode as native, scaled modes have backing stores larger than the panel
+    // (6400×3600 for More Space), and points undercount a Retina panel by half.
+    static func panel(modes: [(width: Int, pixelWidth: Int, pixelHeight: Int, ioFlags: UInt32)],
+                      current: (Int, Int)) -> SharpDisplaySize {
+        let kDisplayModeNativeFlag: UInt32 = 0x0200_0000
+        let best = modes
+            .filter { $0.ioFlags & kDisplayModeNativeFlag != 0 || $0.pixelWidth == $0.width }
+            .max { $0.pixelWidth * $0.pixelHeight < $1.pixelWidth * $1.pixelHeight }
+        let width = best?.pixelWidth ?? current.0
+        let height = best?.pixelHeight ?? current.1
+        return SharpDisplaySize(width: max(640, width - width % 2), height: max(360, height - height % 2))
+    }
 }
 
 enum SharpLinkState {

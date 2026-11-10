@@ -9,7 +9,14 @@ struct AppStateCheck {
         defer { profileDefaults.removePersistentDomain(forName: profileSuite) }
         let profileModel = SharpModel(defaults: profileDefaults)
         let fiveK = SharpDisplaySize(width: 5120, height: 2880)
-        assert(SharpResolution.testedDefault(for: fiveK) == .balanced)
+        assert(SharpResolution.testedDefault(for: fiveK) == .native)
+        assert(SharpResolution.testedDefault(for: SharpDisplaySize(width: 3840, height: 2160)) != .native)
+        let fiveKModes: [(width: Int, pixelWidth: Int, pixelHeight: Int, ioFlags: UInt32)] = [
+            (2560, 5120, 2880, 0), (3200, 6400, 3600, 0), (5120, 5120, 2880, 0), (2560, 2560, 1440, 0)]
+        assert(SharpDisplaySize.panel(modes: fiveKModes, current: (6400, 3600)) == fiveK)
+        assert(SharpDisplaySize.panel(modes: [(1728, 3456, 2234, 0x0200_0003), (1512, 3024, 1964, 0)],
+                                      current: (3024, 1964)) == SharpDisplaySize(width: 3456, height: 2234))
+        assert(SharpDisplaySize.panel(modes: [], current: (2559, 1439)) == SharpDisplaySize(width: 2558, height: 1438))
         assert(SharpResolution.native.isExperimental(for: fiveK))
         assert(SharpResolution.native.isSupported(for: fiveK))
         assert(SharpResolution.native.usesRetina(for: fiveK))
@@ -33,7 +40,7 @@ struct AppStateCheck {
         assert(SharpResolution.testedDefault(for: wide) == .balanced)
         assert(SharpResolution.balanced.size(for: wide) == (2970, 1238))
         profileModel.rememberProfile("5k", name: "5K iMac", display: fiveK)
-        assert(profileModel.resolution == .balanced)
+        assert(profileModel.resolution == .native)
         profileModel.rememberProfile("5k", name: "5K iMac", display: wide)
         assert(profileModel.resolution == .balanced, "Automatic defaults follow changed panel geometry")
         profileModel.rememberProfile("5k", name: "5K iMac", display: fiveK)

@@ -212,17 +212,18 @@ static BOOL wiredAddress(NSString *ip) {
     for (NSStream *stream in @[self.input,self.output]) {
         stream.delegate=self; [stream scheduleInRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes]; [stream open];
     }
-    /* CGDisplayPixelsWide counts points, and the current mode's pixel size is
-     * its backing store (6400×3600 for a 5K iMac set to More Space). The
-     * panel itself is the mode macOS flags as native. */
+    /* Same rule as SharpDisplaySize.panel: the largest native or 1x mode.
+     * 5K iMacs flag no mode native, scaled modes have oversized backing
+     * stores, and CGDisplayPixelsWide counts points. */
     size_t width=CGDisplayPixelsWide(CGMainDisplayID()), height=CGDisplayPixelsHigh(CGMainDisplayID());
     NSDictionary *options=@{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes:@YES};
     CFArrayRef modes=CGDisplayCopyAllDisplayModes(CGMainDisplayID(),(__bridge CFDictionaryRef)options);
+    size_t best=0;
     for(CFIndex i=0; modes && i<CFArrayGetCount(modes); i++) {
         CGDisplayModeRef mode=(CGDisplayModeRef)CFArrayGetValueAtIndex(modes,i);
-        if(CGDisplayModeGetIOFlags(mode) & 0x02000000u) {
-            width=CGDisplayModeGetPixelWidth(mode); height=CGDisplayModeGetPixelHeight(mode); break;
-        }
+        size_t w=CGDisplayModeGetPixelWidth(mode), h=CGDisplayModeGetPixelHeight(mode);
+        BOOL panel=(CGDisplayModeGetIOFlags(mode) & 0x02000000u) || w==CGDisplayModeGetWidth(mode);
+        if(panel && w*h>best) { best=w*h; width=w; height=h; }
     }
     if(modes) CFRelease(modes);
     width&=~(size_t)1; height&=~(size_t)1;
