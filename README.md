@@ -8,14 +8,19 @@
 
 # Sharp
 
-Sharp uses an Ethernet or Thunderbolt cable to turn an older Mac into a display for another Mac. It sends motion as H.264 and restores stable pixels with lossless tiles. The app handles pairing, display mode, cursor, and audio.
+Sharp uses an Ethernet, Thunderbolt or USB cable to turn an older Mac into a display for another Mac. It sends motion as H.264 and restores stable pixels with lossless tiles. The app handles pairing, display mode, cursor, and audio.
 
 ## Connect
 
 - **Ethernet:** a direct cable, or both Macs wired to the same switch. Gigabit recommended.
 - **Thunderbolt:** any Thunderbolt cable between the Macs; macOS sets up Thunderbolt Bridge. Thunderbolt 1/2 Macs need Apple's Thunderbolt 3 to Thunderbolt 2 adapter.
+- **USB:** a USB-C to USB-C or USB-C to USB-A cable from an Apple silicon Mac. Use a SuperSpeed cable (5 Gbps or faster) for full speed.
 - **Wi-Fi** is not supported.
 - **Firewall:** allow incoming connections for Sharp. Ports: TCP 49171 control (another free port if taken, announced over Bonjour), UDP 49172 display, TCP 49173 audio, Bonjour `_sharp._tcp`.
+
+## Anonymous usage
+
+Sharp sends a random install ID and a few values when they change, or once a month: Sharp version, macOS version, Mac model, role, cable, display size, mode, resolution and country. Country comes from Cloudflare; your IP address is never stored. Turn any value, or all of it, off in Sharp's Advanced settings.
 
 ## Source
 
@@ -26,7 +31,8 @@ Sharp uses an Ethernet or Thunderbolt cable to turn an older Mac into a display 
 | `include/sharp/` | Headers for the C core |
 | `src/sender/` | Screen capture, virtual display, H.264 encoding, tile scheduling, and network output |
 | `src/receiver/` | Network input, H.264 decoding, tile composition, and display presentation |
-| `high-sierra/` | Receiver app for iMacs on macOS 10.13, built on the same engine |
+| `high-sierra/` | Receiver app for iMacs on macOS 10.11 to 10.13, built on the same engine |
+| `telemetry/` | Cloudflare Worker that stores anonymous usage |
 | `src/platform/` | macOS cursor rendering |
 | `resources/` | App icons and cursor assets |
 | `tests/` | Focused engine and app-state checks |

@@ -582,9 +582,35 @@ struct SharpAdvancedView: View {
                     .font(.system(size: 12)).foregroundColor(SharpColor.dim)
             }
             }
+
+            SharpUsageSettings()
         }
         .padding(28).frame(width: 520)
         .background(SharpColor.bg).foregroundColor(SharpColor.fg)
+    }
+}
+
+struct SharpUsageSettings: View {
+    @EnvironmentObject var model: SharpModel
+    private func row(_ field: SharpUsageField) -> some View {
+        Toggle(isOn: Binding(get: { !model.usageHidden.contains(field.rawValue) },
+                             set: { model.setUsageField(field, shared: $0) })) {
+            Text("\(field.title) · \(model.usageValue(field) ?? "none")").font(.system(size: 11)).lineLimit(1)
+        }.toggleStyle(CheckboxToggleStyle())
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SharpToggle(title: "Share anonymous usage", isOn: Binding(
+                get: { model.usageEnabled }, set: { model.setUsageEnabled($0) }))
+            Text("A random ID and the values below. Nothing identifies you or this Mac, and your IP address is never stored.")
+                .font(.system(size: 11)).foregroundColor(SharpColor.dim).fixedSize(horizontal: false, vertical: true)
+            if model.usageEnabled {
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 5) { ForEach(SharpUsageField.allCases.prefix(5)) { row($0) } }
+                    VStack(alignment: .leading, spacing: 5) { ForEach(SharpUsageField.allCases.dropFirst(5)) { row($0) } }
+                }
+            }
+        }
     }
 }
 

@@ -61,10 +61,16 @@ final class SharpModel: ObservableObject {
     var listener: NWListener?
     var browser: NWBrowser?
     var control: LineConnection? {
-        didSet { activeLinkLabel = control.flatMap { linkLabel(for: $0.connection.currentPath) }; updatePowerActivities() }
+        didSet {
+            activeLinkLabel = control.flatMap { linkLabel(for: $0.connection.currentPath) }
+            updatePowerActivities()
+            if control != nil { sendUsageIfNeeded() }
+        }
     }
     /// "Thunderbolt", "Ethernet", or "Ethernet · 100 Mb/s" for the current connection.
     @Published var activeLinkLabel: String?
+    @Published var usageEnabled: Bool
+    @Published var usageHidden: Set<String>
     var pendingConnection: NWConnection?
     var senderProcess: Process?
     var receiverProcess: Process? { didSet { updatePowerActivities() } }
@@ -123,6 +129,8 @@ final class SharpModel: ObservableObject {
         preferredInterface = defaults.string(forKey: "preferredInterface") ?? ""
         profiles = (defaults.data(forKey: "peerProfiles").flatMap { try? JSONDecoder().decode([String: SharpPeerProfile].self, from: $0) }) ?? [:]
         logsEnabled = defaults.object(forKey: "logsEnabled") as? Bool ?? false
+        usageEnabled = defaults.object(forKey: "usageEnabled") as? Bool ?? true
+        usageHidden = Set(defaults.stringArray(forKey: "usageHidden") ?? [])
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
         configured = defaults.bool(forKey: "configured")
         sharingEnabled = defaults.object(forKey: "sharingEnabled") as? Bool ?? true

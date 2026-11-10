@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor func checkForUpdate() {
+        SharpModel.shared.sendUsageIfNeeded()
         guard let url = URL(string: "https://aminerostane.com/sharp/version.json") else { return }
         let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         URLSession.shared.dataTask(with: request) { data, _, _ in
@@ -195,10 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor func showAdvanced() {
         if advancedWindow == nil {
-            advancedWindow = makeWindow(size: NSSize(width: 520, height: 570), title: "Sharp Advanced",
+            advancedWindow = makeWindow(size: NSSize(width: 520, height: 790), title: "Sharp Advanced",
                                         content: SharpAdvancedView().environmentObject(SharpModel.shared))
         }
-        advancedWindow?.setContentSize(NSSize(width: 520, height: SharpModel.shared.role == .sender ? 570 : 290))
+        advancedWindow?.setContentSize(NSSize(width: 520, height: SharpModel.shared.role == .sender ? 790 : 510))
         present(advancedWindow)
     }
 

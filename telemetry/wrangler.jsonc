@@ -1,0 +1,11 @@
+{
+  "name": "sharp-telemetry",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "aminerostane.com/api/sharp/ping", "zone_name": "aminerostane.com" }],
+  // Shares the usage database with Showcase, in its own table.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "showcase-telemetry", "database_id": "e2a1dfbe-4380-47be-aa3f-f53711ccaa60" }
+  ]
+}
