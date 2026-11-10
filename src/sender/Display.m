@@ -367,6 +367,51 @@ int sharp_mirror_physical_display_from_virtual(
     return 1;
 }
 
+/*
+ * macOS restores a saved arrangement for the Sharp display, including an old
+ * mirror where this Mac's screen copies it. Extend then shows a mirror and the
+ * Sharp display becomes main. Undo only mirrors that involve the Sharp display,
+ * and save the result so the stale arrangement does not come back.
+ */
+int sharp_extend_virtual_display(CGDirectDisplayID physicalDisplayID,
+                                 CGDirectDisplayID virtualDisplayID) {
+    CGDirectDisplayID displays[16];
+    uint32_t count = 0u;
+    if (virtualDisplayID == 0u ||
+        CGGetOnlineDisplayList(16u, displays, &count) != kCGErrorSuccess) {
+        return 0;
+    }
+    BOOL mirrored = CGDisplayMirrorsDisplay(virtualDisplayID) != kCGNullDirectDisplay;
+    for (uint32_t i = 0u; i < count; i++) {
+        mirrored = mirrored || CGDisplayMirrorsDisplay(displays[i]) == virtualDisplayID;
+    }
+    BOOL virtualIsMain = CGMainDisplayID() == virtualDisplayID &&
+                         physicalDisplayID != 0u && physicalDisplayID != virtualDisplayID;
+    if (!mirrored && !virtualIsMain) {
+        return 0;
+    }
+    CGDisplayConfigRef configuration = NULL;
+    if (CGBeginDisplayConfiguration(&configuration) != kCGErrorSuccess || configuration == NULL) {
+        return 0;
+    }
+    for (uint32_t i = 0u; i < count; i++) {
+        if (displays[i] == virtualDisplayID ||
+            CGDisplayMirrorsDisplay(displays[i]) == virtualDisplayID) {
+            CGConfigureDisplayMirrorOfDisplay(configuration, displays[i], kCGNullDirectDisplay);
+        }
+    }
+    if (virtualIsMain) {
+        CGConfigureDisplayOrigin(configuration, physicalDisplayID, 0, 0);
+        CGConfigureDisplayOrigin(configuration, virtualDisplayID,
+                                 (int32_t)CGDisplayPixelsWide(physicalDisplayID), 0);
+    }
+    CGError error = CGCompleteDisplayConfiguration(configuration, kCGConfigurePermanently);
+    fprintf(stdout, "m1-screen-vdisplay-extend repaired mirror=%u main=%u error=%d\n",
+            mirrored ? 1u : 0u, virtualIsMain ? 1u : 0u, (int)error);
+    fflush(stdout);
+    return error == kCGErrorSuccess;
+}
+
 int sharp_select_display_mode(CGDirectDisplayID displayID,
                               uint32_t width,
                               uint32_t height) {

@@ -1127,6 +1127,8 @@ id sharp_create_virtual_display(uint32_t width,
 int sharp_mirror_physical_display_from_virtual(
     CGDirectDisplayID physicalDisplayID,
     CGDirectDisplayID virtualDisplayID);
+int sharp_extend_virtual_display(CGDirectDisplayID physicalDisplayID,
+                                 CGDirectDisplayID virtualDisplayID);
 int sharp_select_display_mode(CGDirectDisplayID displayID,
                               uint32_t width,
                               uint32_t height);

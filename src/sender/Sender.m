@@ -101,6 +101,9 @@ int main(int argc, char **argv) {
             close(fd);
             return 1;
         }
+        if (!virtualMirrorRequested && virtualDisplay != nil) {
+            sharp_extend_virtual_display(physicalDisplayID, requestedDisplayID);
+        }
         if (virtualMirrorRequested && virtualDisplay != nil) {
             int virtualMirrorActive =
                 sharp_mirror_physical_display_from_virtual(physicalDisplayID,
