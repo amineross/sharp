@@ -945,6 +945,14 @@ extern volatile sig_atomic_t g_sharp_capture_stopped;
                sampleTimeNs:(uint64_t)sampleTimeNs
                     imageId:(uint32_t)imageId
                     visible:(BOOL)visible;
+- (void)sendCursorImage:(NSData *)bgra
+                imageId:(uint32_t)imageId
+                  width:(uint32_t)width
+                 height:(uint32_t)height
+              drawWidth:(uint32_t)drawWidth
+             drawHeight:(uint32_t)drawHeight
+               hotspotX:(uint32_t)hotspotX
+               hotspotY:(uint32_t)hotspotY;
 - (screen_tx_frame_job_t *)mergeMotionPrerollJob:(screen_tx_frame_job_t *)held
                                          withJob:(screen_tx_frame_job_t *)current
                                             bgra:(const uint8_t *)bgra
@@ -1119,6 +1127,11 @@ SCShareableContent *sharp_copy_shareable_content(NSError **errorOut);
 NSRect sharp_appkit_frame_for_display(CGDirectDisplayID displayID);
 size_t sharp_cursor_shapes_prepare(void);
 uint32_t sharp_cursor_image_id(NSCursor *cursor);
+int sharp_cursor_seed(void);
+NSData *sharp_cursor_read(uint32_t *widthOut, uint32_t *heightOut,
+                          CGSize *pointsOut, CGPoint *hotspotOut);
+NSCursor *sharp_cursor_from_bitmap(NSData *bgra, uint32_t width, uint32_t height,
+                                   CGSize points, CGPoint hotspot);
 int sharp_virtual_display_api_available(void);
 id sharp_create_virtual_display(uint32_t width,
                                        uint32_t height,

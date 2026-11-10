@@ -1,6 +1,9 @@
 #import "Internal.h"
 #import "../platform/CursorImage.h"
 
+@implementation SharpCursorBitmap
+@end
+
 @implementation SharpFramebufferView
 @synthesize program = _program;
 @synthesize rectProgram = _rectProgram;
@@ -542,7 +545,13 @@
     }
     glEnable(GL_BLEND);
     sharp_cursor_texture_slot_t *cursorSlot = NULL;
-    if (cursor->image_id > 0u && cursor->image_id < SHARP_CURSOR_IMAGE_MAX &&
+    if ((cursor->image_id & SHARP_CURSOR_IMAGE_CUSTOM) != 0u) {
+        [self uploadCustomCursor:cursor->image_id];
+    }
+    if ((cursor->image_id & SHARP_CURSOR_IMAGE_CUSTOM) != 0u &&
+        _customCursorId == cursor->image_id && _customCursorSlot.texture != 0u) {
+        cursorSlot = &_customCursorSlot;
+    } else if (cursor->image_id > 0u && cursor->image_id < SHARP_CURSOR_IMAGE_MAX &&
         _cursorSlots[cursor->image_id].texture != 0u) {
         cursorSlot = &_cursorSlots[cursor->image_id];
     } else if (_cursorSlots[SHARP_CURSOR_IMAGE_ARROW].texture != 0u) {
@@ -658,6 +667,30 @@
     _cursorTextureWidth = (uint32_t)width;
     _cursorTextureHeight = (uint32_t)height;
     return YES;
+}
+
+- (void)uploadCustomCursor:(uint32_t)imageId {
+    SharpCursorBitmap *image = self.pendingCursorImage;
+    if (_customCursorId == imageId || image == nil || image.imageId != imageId) {
+        return;
+    }
+    if (_customCursorSlot.texture == 0u) {
+        glGenTextures(1, &_customCursorSlot.texture);
+    }
+    glBindTexture(GL_TEXTURE_2D, _customCursorSlot.texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)image.width, (GLsizei)image.height, 0,
+                 GL_BGRA, GL_UNSIGNED_BYTE, image.bgra.bytes);
+    /* The slot's size is where it is drawn, in stream pixels, not the bitmap's size. */
+    _customCursorSlot.width = image.drawWidth;
+    _customCursorSlot.height = image.drawHeight;
+    _customCursorSlot.hotspot_x = (uint16_t)MIN(image.hotspotX, UINT16_MAX);
+    _customCursorSlot.hotspot_y = (uint16_t)MIN(image.hotspotY, UINT16_MAX);
+    _customCursorId = imageId;
 }
 
 - (BOOL)loadCursorTexturePath:(NSString *)path
@@ -1176,6 +1209,9 @@
         if (_cursorSlots[i].texture != 0u) {
             glDeleteTextures(1, &_cursorSlots[i].texture);
         }
+    }
+    if (_customCursorSlot.texture != 0u) {
+        glDeleteTextures(1, &_customCursorSlot.texture);
     }
     for (size_t i = 0; i < SHARP_MAX_VIDEO_REGIONS; i++) {
         [self releaseVideoSlot:&_videoSlots[i]];

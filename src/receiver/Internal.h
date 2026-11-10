@@ -205,7 +205,20 @@ typedef struct sharp_h264_region_stats {
     uint64_t invalid;
 } sharp_h264_region_stats_t;
 
+@interface SharpCursorBitmap : NSObject
+@property(nonatomic, strong) NSData *bgra;
+@property(nonatomic, assign) uint32_t imageId;
+@property(nonatomic, assign) uint32_t width;
+@property(nonatomic, assign) uint32_t height;
+@property(nonatomic, assign) uint32_t drawWidth;
+@property(nonatomic, assign) uint32_t drawHeight;
+@property(nonatomic, assign) uint32_t hotspotX;
+@property(nonatomic, assign) uint32_t hotspotY;
+@end
+
 @interface SharpFramebufferView : NSOpenGLView {
+    sharp_cursor_texture_slot_t _customCursorSlot;
+    uint32_t _customCursorId;
     sharp_video_texture_slot_t _videoSlots[SHARP_MAX_VIDEO_REGIONS];
     sharp_cursor_texture_slot_t _cursorSlots[SHARP_CURSOR_IMAGE_MAX];
     uint8_t _motionMaskTextureData[SHARP_MOTION_MASK_MAX_BYTES];
@@ -236,6 +249,7 @@ typedef struct sharp_h264_region_stats {
     sharp_video_texture_mode_t _videoTextureMode;
     float _videoSharpen;
 }
+@property(atomic, strong) SharpCursorBitmap *pendingCursorImage;
 @property(nonatomic, assign) GLuint program;
 @property(nonatomic, assign) GLuint rectProgram;
 @property(nonatomic, assign) GLuint nv12Program;
@@ -285,6 +299,7 @@ typedef struct sharp_h264_region_stats {
                            g:(float)g
                            b:(float)b;
 - (void)drawCursor:(const sharp_cursor_snapshot_t *)cursor;
+- (void)uploadCustomCursor:(uint32_t)imageId;
 - (BOOL)loadCursorTexture;
 - (BOOL)loadCursorTexturePath:(NSString *)path
                          slot:(sharp_cursor_texture_slot_t *)slot;
@@ -530,6 +545,9 @@ typedef struct sharp_h264_region_stats {
     uint16_t _cursorHotspotX;
     uint16_t _cursorHotspotY;
     uint32_t _cursorImageId;
+    NSMutableData *_cursorImageAssembly;
+    NSMutableIndexSet *_cursorImageChunks;
+    uint32_t _cursorImageAssemblyId;
     sharp_cursor_sample_t _cursorHistory[SHARP_CURSOR_HISTORY];
     uint32_t _cursorHistoryCount;
     uint32_t _cursorHistoryNewest;
@@ -737,6 +755,8 @@ typedef struct sharp_h264_region_stats {
 - (void)handlePingDatagram:(const shtp_header_t *)sh;
 - (void)handleCursorDatagram:(const shtp_header_t *)sh
                      payload:(const uint8_t *)payload;
+- (void)handleCursorImageDatagram:(const shtp_header_t *)sh
+                          payload:(const uint8_t *)payload;
 - (void)recordCursorSample:(uint64_t)sampleNs receivedNs:(uint64_t)rxNs;
 - (void)interpolateCursorAt:(uint64_t)nowNs into:(sharp_cursor_snapshot_t *)cursor;
 - (uint16_t)sendMissingVsliceNacksForRegion:(uint16_t)regionId

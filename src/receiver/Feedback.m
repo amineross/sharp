@@ -244,6 +244,54 @@
                  (struct sockaddr *)&_senderAddr, _senderAddrLen);
 }
 
+- (void)handleCursorImageDatagram:(const shtp_header_t *)sh
+                          payload:(const uint8_t *)payload {
+    sharp_cursor_image_chunk_t image;
+    if (sh == NULL || payload == NULL || sh->payload_len < sizeof(image)) {
+        return;
+    }
+    memcpy(&image, payload, sizeof(image));
+    uint32_t imageId = ntohl(image.image_id);
+    uint32_t width = ntohs(image.width), height = ntohs(image.height);
+    uint32_t offset = ntohl(image.offset), total = ntohl(image.total_bytes);
+    uint32_t bytes = sh->payload_len - (uint32_t)sizeof(image);
+    if ((imageId & SHARP_CURSOR_IMAGE_CUSTOM) == 0u || width == 0u || height == 0u ||
+        width > SHARP_CURSOR_IMAGE_MAX_SIDE || height > SHARP_CURSOR_IMAGE_MAX_SIDE ||
+        total != width * height * 4u || offset % SHARP_CURSOR_IMAGE_CHUNK_BYTES != 0u ||
+        bytes == 0u || bytes > SHARP_CURSOR_IMAGE_CHUNK_BYTES || offset > total - bytes) {
+        return;
+    }
+    if (self.frameView.pendingCursorImage.imageId == imageId) {
+        return;
+    }
+    pthread_mutex_lock(&_stateLock);
+    if (_cursorImageAssemblyId != imageId || _cursorImageAssembly.length != total) {
+        _cursorImageAssemblyId = imageId;
+        _cursorImageAssembly = [NSMutableData dataWithLength:total];
+        _cursorImageChunks = [NSMutableIndexSet indexSet];
+    }
+    memcpy((uint8_t *)_cursorImageAssembly.mutableBytes + offset, payload + sizeof(image), bytes);
+    [_cursorImageChunks addIndex:offset / SHARP_CURSOR_IMAGE_CHUNK_BYTES];
+    SharpCursorBitmap *done = nil;
+    if (_cursorImageChunks.count * SHARP_CURSOR_IMAGE_CHUNK_BYTES >= total) {
+        done = [SharpCursorBitmap new];
+        done.bgra = _cursorImageAssembly;
+        done.imageId = imageId;
+        done.width = width;
+        done.height = height;
+        done.drawWidth = ntohs(image.draw_width);
+        done.drawHeight = ntohs(image.draw_height);
+        done.hotspotX = ntohs(image.hotspot_x);
+        done.hotspotY = ntohs(image.hotspot_y);
+        _cursorImageAssembly = nil;
+        _cursorImageAssemblyId = 0u;
+    }
+    pthread_mutex_unlock(&_stateLock);
+    if (done != nil) {
+        self.frameView.pendingCursorImage = done;
+    }
+}
+
 - (void)handleCursorDatagram:(const shtp_header_t *)sh
                      payload:(const uint8_t *)payload {
     /* Arrival time before taking the lock, which rendering may hold. */
@@ -275,7 +323,8 @@
     _cursorHotspotX = ntohs(cursor.hotspot_x);
     _cursorHotspotY = ntohs(cursor.hotspot_y);
     _cursorImageId = ntohl(cursor.image_id);
-    if (_cursorImageId == 0u || _cursorImageId >= SHARP_CURSOR_IMAGE_MAX) {
+    if ((_cursorImageId & SHARP_CURSOR_IMAGE_CUSTOM) == 0u &&
+        (_cursorImageId == 0u || _cursorImageId >= SHARP_CURSOR_IMAGE_MAX)) {
         _cursorImageId = SHARP_CURSOR_IMAGE_ARROW;
     }
     _cursorVisible = (ntohl(cursor.flags) & 1u) != 0;

@@ -180,6 +180,9 @@
         } else if (valid && sh.type == SHTP_PACKET_DATA &&
                    sh.payload_type == SHTP_PAYLOAD_SYNTH_CURSOR) {
             [self handleCursorDatagram:&sh payload:buffer + sizeof(sh)];
+        } else if (valid && sh.type == SHTP_PACKET_DATA &&
+                   sh.payload_type == SHTP_PAYLOAD_CURSOR_IMAGE) {
+            [self handleCursorImageDatagram:&sh payload:buffer + sizeof(sh)];
         } else if (valid && sh.type == SHTP_PACKET_PING &&
                    sh.payload_type == SHTP_PAYLOAD_CONTROL) {
             [self handlePingDatagram:&sh];
@@ -429,6 +432,11 @@
                        sh.type == SHTP_PACKET_DATA &&
                        sh.payload_type == SHTP_PAYLOAD_SYNTH_CURSOR) {
                 [self handleCursorDatagram:&sh payload:buffer + sizeof(sh)];
+                handledVideo = 1;
+            } else if (shtp_header_is_valid(&sh, (size_t)n) &&
+                       sh.type == SHTP_PACKET_DATA &&
+                       sh.payload_type == SHTP_PAYLOAD_CURSOR_IMAGE) {
+                [self handleCursorImageDatagram:&sh payload:buffer + sizeof(sh)];
                 handledVideo = 1;
             } else if (shtp_header_is_valid(&sh, (size_t)n) &&
                        sh.type == SHTP_PACKET_PING &&

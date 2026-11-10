@@ -53,6 +53,59 @@
     pthread_mutex_unlock(&_sendLock);
 }
 
+- (void)sendCursorImage:(NSData *)bgra
+                imageId:(uint32_t)imageId
+                  width:(uint32_t)width
+                 height:(uint32_t)height
+              drawWidth:(uint32_t)drawWidth
+             drawHeight:(uint32_t)drawHeight
+               hotspotX:(uint32_t)hotspotX
+               hotspotY:(uint32_t)hotspotY {
+    uint32_t total = (uint32_t)bgra.length;
+    if (total != width * height * 4u || total == 0u) {
+        return;
+    }
+    uint16_t chunkCount = (uint16_t)((total + SHARP_CURSOR_IMAGE_CHUNK_BYTES - 1u) /
+                                     SHARP_CURSOR_IMAGE_CHUNK_BYTES);
+    uint8_t packet[sizeof(shtp_header_t) + sizeof(sharp_cursor_image_chunk_t) +
+                   SHARP_CURSOR_IMAGE_CHUNK_BYTES];
+    for (uint16_t chunk = 0; chunk < chunkCount; chunk++) {
+        uint32_t offset = (uint32_t)chunk * SHARP_CURSOR_IMAGE_CHUNK_BYTES;
+        uint32_t bytes = MIN(SHARP_CURSOR_IMAGE_CHUNK_BYTES, total - offset);
+        sharp_cursor_image_chunk_t image = {
+            .image_id = htonl(imageId),
+            .width = htons((uint16_t)width),
+            .height = htons((uint16_t)height),
+            .draw_width = htons((uint16_t)MIN(drawWidth, UINT16_MAX)),
+            .draw_height = htons((uint16_t)MIN(drawHeight, UINT16_MAX)),
+            .hotspot_x = htons((uint16_t)MIN(hotspotX, UINT16_MAX)),
+            .hotspot_y = htons((uint16_t)MIN(hotspotY, UINT16_MAX)),
+            .offset = htonl(offset),
+            .total_bytes = htonl(total),
+        };
+        shtp_header_t sh;
+        memset(&sh, 0, sizeof(sh));
+        sh.magic = SHTP_MAGIC;
+        sh.version = SHTP_VERSION;
+        sh.header_bytes = SHTP_HEADER_BYTES;
+        sh.type = SHTP_PACKET_DATA;
+        sh.payload_type = SHTP_PAYLOAD_CURSOR_IMAGE;
+        sh.frame_id = _frameId;
+        sh.chunk_id = chunk;
+        sh.chunk_count = chunkCount;
+        sh.payload_len = (uint32_t)(sizeof(image) + bytes);
+        sh.send_time_ns = shtp_now_ns();
+        pthread_mutex_lock(&_sendLock);
+        sh.sequence = _sequence++;
+        shtp_header_host_to_wire(&sh);
+        memcpy(packet, &sh, sizeof(sh));
+        memcpy(packet + sizeof(sh), &image, sizeof(image));
+        memcpy(packet + sizeof(sh) + sizeof(image), (const uint8_t *)bgra.bytes + offset, bytes);
+        (void)send(_fd, packet, sizeof(sh) + sizeof(image) + bytes, 0);
+        pthread_mutex_unlock(&_sendLock);
+    }
+}
+
 - (screen_tx_frame_job_t *)mergeMotionPrerollJob:(screen_tx_frame_job_t *)held
                                          withJob:(screen_tx_frame_job_t *)current
                                             bgra:(const uint8_t *)bgra

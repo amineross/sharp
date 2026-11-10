@@ -400,24 +400,72 @@ int main(int argc, char **argv) {
             __block uint64_t lastCursorSendNs = 0u;
             __block uint64_t lastShapeNs = 0u;
             __block uint32_t imageId = SHARP_CURSOR_IMAGE_ARROW;
+            __block int lastSeed = -1;
+            __block NSData *customImage = nil;
+            __block struct { uint32_t width, height, drawWidth, drawHeight, hotspotX, hotspotY; } custom = {0};
+            __block uint64_t lastImageSendNs = 0u;
             cursorTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                                  cursorQueue);
             dispatch_source_set_timer(cursorTimer, dispatch_time(DISPATCH_TIME_NOW, 0),
                                       4166667ull, 100000ull);
             dispatch_source_set_event_handler(cursorTimer, ^{
               uint64_t nowNs = shtp_now_ns();
-              /* The shape lookup costs ~0.2 ms; 30 Hz is quick enough for a
-               * pointer turning into a text cursor. */
-              if (lastShapeNs == 0u || nowNs - lastShapeNs >= 33000000ULL) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                  imageId = sharp_cursor_image_id(NSCursor.currentSystemCursor);
-#pragma clang diagnostic pop
-                  lastShapeNs = nowNs;
-              }
               /* Global CoreGraphics coordinates, read fresh each sample so a
                * rearranged display does not offset the cursor. */
               CGRect bounds = CGDisplayBounds(cursorDisplayID);
+              /* Without the seed, poll the deprecated NSCursor at 30 Hz; the
+               * lookup costs ~0.2 ms. */
+              int seed = sharp_cursor_seed();
+              if (seed != 0 ? seed != lastSeed
+                            : (lastShapeNs == 0u || nowNs - lastShapeNs >= 33000000ULL)) {
+                  lastSeed = seed;
+                  lastShapeNs = nowNs;
+                  uint32_t width = 0u, height = 0u;
+                  CGSize points = CGSizeZero;
+                  CGPoint hotspot = CGPointZero;
+                  NSData *bgra = seed != 0 ? sharp_cursor_read(&width, &height, &points, &hotspot) : nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                  NSCursor *cursor = bgra != nil
+                      ? sharp_cursor_from_bitmap(bgra, width, height, points, hotspot)
+                      : NSCursor.currentSystemCursor;
+#pragma clang diagnostic pop
+                  uint32_t known = sharp_cursor_image_id(cursor);
+                  customImage = nil;
+                  if (known != 0u || bgra == nil || bounds.size.width <= 0.0) {
+                      imageId = known != 0u ? known : SHARP_CURSOR_IMAGE_ARROW;
+                  } else {
+                      uint32_t hash = 2166136261u;
+                      const uint8_t *bytes = bgra.bytes;
+                      for (NSUInteger i = 0; i < bgra.length; i++) hash = (hash ^ bytes[i]) * 16777619u;
+                      hash = (hash ^ width ^ (height << 16u)) * 16777619u;
+                      double scale = (double)config.width / bounds.size.width;
+                      imageId = SHARP_CURSOR_IMAGE_CUSTOM | (hash & ~SHARP_CURSOR_IMAGE_CUSTOM);
+                      customImage = bgra;
+                      custom.width = width;
+                      custom.height = height;
+                      custom.drawWidth = (uint32_t)lround(points.width * scale);
+                      custom.drawHeight = (uint32_t)lround(points.height * scale);
+                      custom.hotspotX = (uint32_t)lround(hotspot.x * scale);
+                      custom.hotspotY = (uint32_t)lround(hotspot.y * scale);
+                      lastImageSendNs = 0u;
+                  }
+                  fprintf(stdout, "cursor-shape id=%08x bitmap=%ux%u\n", imageId, width, height);
+                  fflush(stdout);
+              }
+              /* Images travel over UDP, so repeat them while they are shown. */
+              if (customImage != nil &&
+                  (lastImageSendNs == 0u || nowNs - lastImageSendNs >= 250000000ULL)) {
+                  [sender sendCursorImage:customImage
+                                  imageId:imageId
+                                    width:custom.width
+                                   height:custom.height
+                                drawWidth:custom.drawWidth
+                               drawHeight:custom.drawHeight
+                                 hotspotX:custom.hotspotX
+                                 hotspotY:custom.hotspotY];
+                  lastImageSendNs = nowNs;
+              }
               CGEventRef event = CGEventCreate(NULL);
               if (event == NULL || bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
                   if (event != NULL) CFRelease(event);

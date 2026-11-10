@@ -1,3 +1,4 @@
+#include <dlfcn.h>
 #import "Internal.h"
 SCDisplay *find_main_display(SCShareableContent *content) {
     CGDirectDisplayID mainID = CGMainDisplayID();
@@ -153,9 +154,9 @@ size_t sharp_cursor_shapes_prepare(void) {
 uint32_t sharp_cursor_image_id(NSCursor *cursor) {
     sharp_cursor_shape_t shape;
     if (cursor == nil || !sharp_cursor_shape(cursor, &shape)) {
-        return SHARP_CURSOR_IMAGE_ARROW;
+        return 0u;
     }
-    uint32_t best = SHARP_CURSOR_IMAGE_ARROW;
+    uint32_t best = 0u;
     double bestDistance = DBL_MAX;
     for (size_t i = 0; i < g_cursor_shape_count; i++) {
         const sharp_cursor_shape_t *candidate = &g_cursor_shapes[i];
@@ -172,8 +173,92 @@ uint32_t sharp_cursor_image_id(NSCursor *cursor) {
         }
     }
     /* Identical system art scores 0; the closest distinct pair scores ~16.
-     * Anything else is an app's custom cursor: draw the arrow. */
-    return bestDistance <= 8.0 ? best : SHARP_CURSOR_IMAGE_ARROW;
+     * Anything else is an app's custom cursor, which has no themed image. */
+    return bestDistance <= 8.0 ? best : 0u;
+}
+
+/*
+ * NSCursor.currentSystemCursor is deprecated and documented to become nil, so
+ * read WindowServer's cursor directly. The seed changes only when the shape
+ * does, which keeps the 240 Hz position timer cheap.
+ */
+typedef int (*sharp_cgs_connection_fn)(void);
+typedef int (*sharp_cgs_seed_fn)(void);
+typedef CGError (*sharp_cgs_size_fn)(int, int *);
+typedef CGError (*sharp_cgs_data_fn)(int, uint8_t *, int *, int *, CGRect *, CGPoint *,
+                                     int *, int *, int *);
+static sharp_cgs_connection_fn g_cgs_connection;
+static sharp_cgs_seed_fn g_cgs_seed;
+static sharp_cgs_size_fn g_cgs_size;
+static sharp_cgs_data_fn g_cgs_data;
+
+static void sharp_cursor_spi_load(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        (void)dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+        g_cgs_connection = (sharp_cgs_connection_fn)dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
+        g_cgs_seed = (sharp_cgs_seed_fn)dlsym(RTLD_DEFAULT, "CGSCurrentCursorSeed");
+        g_cgs_size = (sharp_cgs_size_fn)dlsym(RTLD_DEFAULT, "CGSGetGlobalCursorDataSize");
+        g_cgs_data = (sharp_cgs_data_fn)dlsym(RTLD_DEFAULT, "CGSGetGlobalCursorData");
+    });
+}
+
+int sharp_cursor_seed(void) {
+    sharp_cursor_spi_load();
+    return g_cgs_seed != NULL && g_cgs_size != NULL && g_cgs_data != NULL &&
+                   g_cgs_connection != NULL
+               ? g_cgs_seed()
+               : 0;
+}
+
+NSData *sharp_cursor_read(uint32_t *widthOut, uint32_t *heightOut,
+                          CGSize *pointsOut, CGPoint *hotspotOut) {
+    sharp_cursor_spi_load();
+    if (g_cgs_size == NULL || g_cgs_data == NULL || g_cgs_connection == NULL) {
+        return nil;
+    }
+    int size = 0;
+    if (g_cgs_size(g_cgs_connection(), &size) != kCGErrorSuccess || size <= 0) {
+        return nil;
+    }
+    NSMutableData *pixels = [NSMutableData dataWithLength:(NSUInteger)size];
+    int rowBytes = 0, depth = 0, components = 0, bitsPerComponent = 0;
+    CGRect rect = CGRectZero;
+    CGPoint hotspot = CGPointZero;
+    if (g_cgs_data(g_cgs_connection(), pixels.mutableBytes, &size, &rowBytes, &rect, &hotspot,
+                   &depth, &components, &bitsPerComponent) != kCGErrorSuccess ||
+        depth != 32 || components != 4 || bitsPerComponent != 8 || rowBytes <= 0 ||
+        size % rowBytes != 0) {
+        return nil;
+    }
+    uint32_t width = (uint32_t)rowBytes / 4u;
+    uint32_t height = (uint32_t)(size / rowBytes);
+    if (width == 0u || height == 0u || width > SHARP_CURSOR_IMAGE_MAX_SIDE ||
+        height > SHARP_CURSOR_IMAGE_MAX_SIDE || rect.size.width <= 0.0 || rect.size.height <= 0.0) {
+        return nil;
+    }
+    *widthOut = width;
+    *heightOut = height;
+    *pointsOut = rect.size;
+    *hotspotOut = hotspot;
+    return pixels;
+}
+
+NSCursor *sharp_cursor_from_bitmap(NSData *bgra, uint32_t width, uint32_t height,
+                                   CGSize points, CGPoint hotspot) {
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)bgra);
+    CGImageRef image = CGImageCreate(width, height, 8, 32, width * 4u, colorSpace,
+                                     kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst,
+                                     provider, NULL, false, kCGRenderingIntentDefault);
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(colorSpace);
+    if (image == NULL) {
+        return nil;
+    }
+    NSImage *nsImage = [[NSImage alloc] initWithCGImage:image size:points];
+    CGImageRelease(image);
+    return [[NSCursor alloc] initWithImage:nsImage hotSpot:hotspot];
 }
 
 int sharp_virtual_display_api_available(void) {

@@ -108,6 +108,30 @@ typedef enum sharp_cursor_image_id {
 _Static_assert(sizeof(sharp_cursor_position_t) == 40,
                "unexpected cursor position size");
 
+/* A cursor shape Sharp has no themed image for, such as an app's own cursor
+ * or the screenshot crosshair. Its image_id has this bit set; older receivers
+ * draw the arrow instead. */
+#define SHARP_CURSOR_IMAGE_CUSTOM 0x80000000u
+#define SHARP_CURSOR_IMAGE_MAX_SIDE 256u
+#define SHARP_CURSOR_IMAGE_CHUNK_BYTES 1344u
+
+/* SHTP_PAYLOAD_CURSOR_IMAGE: one slice of a premultiplied BGRA bitmap. The
+ * receiver draws it at draw_width x draw_height stream pixels, hotspot first. */
+typedef struct __attribute__((packed)) sharp_cursor_image_chunk {
+    uint32_t image_id;
+    uint16_t width;
+    uint16_t height;
+    uint16_t draw_width;
+    uint16_t draw_height;
+    uint16_t hotspot_x;
+    uint16_t hotspot_y;
+    uint32_t offset;
+    uint32_t total_bytes;
+} sharp_cursor_image_chunk_t;
+
+_Static_assert(sizeof(sharp_cursor_image_chunk_t) == 24,
+               "unexpected cursor image chunk size");
+
 uint64_t shtp_htonll(uint64_t value);
 uint64_t shtp_ntohll(uint64_t value);
 void shtp_header_host_to_wire(shtp_header_t *header);
