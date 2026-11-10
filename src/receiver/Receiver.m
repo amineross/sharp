@@ -54,6 +54,12 @@ int main(int argc, char **argv) {
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        /* The menu bar shows over the full-screen desktop; an empty menu looks broken. */
+        NSMenu *menu = [NSMenu new];
+        NSMenuItem *root = [menu addItemWithTitle:@"" action:nil keyEquivalent:@""];
+        root.submenu = [NSMenu new];
+        [root.submenu addItemWithTitle:@"Hide Sharp" action:@selector(hide:) keyEquivalent:@"h"];
+        app.mainMenu = menu;
         SharpDisplayApp *delegate = [[SharpDisplayApp alloc] init];
         delegate.config = config;
         delegate.fd = -1;

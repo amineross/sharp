@@ -73,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       name: NSWorkspace.screensDidWakeNotification, object: nil)
             DistributedNotificationCenter.default().addObserver(self, selector: #selector(screensDidWake),
                                                                 name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(screensDidChange),
+                                                   name: NSApplication.didChangeScreenParametersNotification, object: nil)
             self.installStatusItem()
             self.scheduleUpdateCheck()
             SharpModel.shared.activate()
@@ -143,6 +145,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc private func screensDidWake() {
         SharpModel.shared.screensDidWake()
+    }
+
+    // Mirror and Extend resize the main screen under open windows. The popover
+    // keeps its old coordinates, which can now be off screen.
+    @MainActor @objc private func screensDidChange() {
+        if popover?.isShown == true {
+            popover?.close()
+            DispatchQueue.main.async { self.showMenu() }
+        }
+        for window in NSApp.windows where window.isVisible && window.screen == nil {
+            window.center()
+        }
     }
 
     @MainActor private func installStatusItem() {
