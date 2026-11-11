@@ -14,7 +14,7 @@ extension SharpModel {
         guard !localSleeping else { return }
         do {
             // Bonjour carries the port, so when another app holds 49171 any free port works.
-            let listener = try NWListener(using: directParameters, on: controlPortInUse ? .any : controlPort)
+            let listener = try NWListener(using: listenerOnAnyInterface ? .tcp : directParameters, on: controlPortInUse ? .any : controlPort)
             self.listener = listener
             listener.service = NWListener.Service(name: peerID, type: serviceType)
             listener.serviceRegistrationUpdateHandler = { change in
@@ -33,6 +33,13 @@ extension SharpModel {
                             self.linkState = self.peerReportedSleep ? .sleeping : .waiting
                             self.status = "Connect an Ethernet, Thunderbolt or USB cable"
                         }
+                    case .waiting(.posix(.ENETDOWN)) where !self.listenerOnAnyInterface && !directInterfaces().isEmpty:
+                        // macOS 11 and older see no network for a listener that excludes Wi-Fi,
+                        // even with Ethernet or USB up. accept() still rejects Wi-Fi.
+                        self.trace("listener sees no wired network; listening on any interface")
+                        self.listenerOnAnyInterface = true
+                        listener.cancel(); self.listener = nil
+                        self.startReceiverService()
                     case .waiting(let error):
                         if self.isLocalNetworkDenied(error) {
                             self.localNetworkDenied = true

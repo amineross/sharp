@@ -207,6 +207,7 @@ struct PermissionView: View {
             Text("Sharp").font(.system(size: 27, weight: .semibold))
             HStack(spacing: 10) {
                 SharpRoleCard(role: .sender, selected: model.role == .sender) { model.role = .sender; model.runProbes() }
+                    .disabled(!SharpModel.canSend).opacity(SharpModel.canSend ? 1 : 0.4)
                 SharpRoleCard(role: .receiver, selected: model.role == .receiver) { model.role = .receiver; model.runProbes() }
             }
             if model.role == .sender && model.configured && model.needsScreenPermission {

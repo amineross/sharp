@@ -100,6 +100,7 @@ final class SharpModel: ObservableObject {
     var displayActivity: NSObjectProtocol?
     var peerDisplayAsleep = false { didSet { updatePowerActivities() } }
     var controlPortInUse = false
+    var listenerOnAnyInterface = false
     @Published var localNetworkRequested = false
     @Published var localNetworkDenied = false
     var localNetworkProbe: NWBrowser?
@@ -118,7 +119,7 @@ final class SharpModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let savedRole = defaults.string(forKey: "role")
-        role = SharpRole(rawValue: savedRole ?? "") ?? .sender
+        role = Self.canSend ? SharpRole(rawValue: savedRole ?? "") ?? .sender : .receiver
         hasSavedRole = savedRole != nil
         resolution = SharpResolution(rawValue: defaults.string(forKey: "resolution") ?? "") ?? .native
         displayMode = SharpMode(rawValue: defaults.string(forKey: "displayMode") ?? "") ?? .mirror
@@ -231,8 +232,14 @@ final class SharpModel: ObservableObject {
         settingsChanged()
     }
 
+    /// The sender needs ScreenCaptureKit, which arrived in macOS 12.3.
+    static var canSend: Bool {
+        if #available(macOS 12.3, *) { return true }
+        return false
+    }
+
     func chooseRole(_ newRole: SharpRole) {
-        guard role != newRole else { return }
+        guard role != newRole, newRole == .receiver || Self.canSend else { return }
         role = newRole
         persist()
         runProbes()
